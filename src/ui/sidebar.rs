@@ -36,23 +36,30 @@ impl WorkspaceEntry {
 pub struct SidebarStyle;
 
 /// Sidebar widget displaying a list of workspace entries.
-pub struct Sidebar<'a, Message> {
-    workspaces: &'a [WorkspaceEntry],
+pub struct Sidebar<Message> {
+    workspaces: Vec<WorkspaceEntry>,
     active_id: usize,
     _phantom: std::marker::PhantomData<Message>,
 }
 
-impl<'a, Message: Clone + 'a> Sidebar<'a, Message> {
-    pub fn new(workspaces: &'a [WorkspaceEntry], active_id: usize) -> Self {
+impl<Message: Clone + 'static> Sidebar<Message> {
+    pub fn new(workspaces: &[WorkspaceEntry], active_id: usize) -> Self {
+        let owned: Vec<WorkspaceEntry> = workspaces.iter().map(|ws| WorkspaceEntry {
+            id: ws.id,
+            name: ws.name.clone(),
+            git_branch: ws.git_branch.clone(),
+            cwd: ws.cwd.clone(),
+            has_waiting: ws.has_waiting,
+        }).collect();
         Self {
-            workspaces,
+            workspaces: owned,
             active_id,
             _phantom: std::marker::PhantomData,
         }
     }
 
-    pub fn view(&self) -> Element<'a, Message> {
-        let entries: Vec<Element<'a, Message>> = self
+    pub fn view(&self) -> Element<'static, Message> {
+        let entries: Vec<Element<'static, Message>> = self
             .workspaces
             .iter()
             .map(|ws| self.render_entry(ws))
@@ -70,7 +77,7 @@ impl<'a, Message: Clone + 'a> Sidebar<'a, Message> {
             .into()
     }
 
-    fn render_entry(&self, ws: &WorkspaceEntry) -> Element<'a, Message> {
+    fn render_entry(&self, ws: &WorkspaceEntry) -> Element<'static, Message> {
         let is_active = ws.id == self.active_id;
 
         // Name row
@@ -79,7 +86,7 @@ impl<'a, Message: Clone + 'a> Sidebar<'a, Message> {
             .size(14);
 
         // Optional waiting badge on the right
-        let badge: Element<'a, Message> = if ws.has_waiting {
+        let badge: Element<'static, Message> = if ws.has_waiting {
             text("●")
                 .color(AppTheme::BADGE_ACTIVE)
                 .size(12)
@@ -96,7 +103,7 @@ impl<'a, Message: Clone + 'a> Sidebar<'a, Message> {
         .align_y(iced::Alignment::Center);
 
         // Optional git branch subtitle
-        let branch_row: Element<'a, Message> = if let Some(branch) = &ws.git_branch {
+        let branch_row: Element<'static, Message> = if let Some(branch) = &ws.git_branch {
             text(format!("  {}", branch))
                 .color(AppTheme::TEXT_DIM)
                 .size(11)

@@ -94,7 +94,7 @@ impl TerminalPane {
         Self { grid, is_waiting, font_size }
     }
 
-    pub fn view<'a, Message: 'a>(&'a self) -> Element<'a, Message> {
+    pub fn view<Message: 'static>(&self) -> Element<'static, Message> {
         iced::widget::canvas(TerminalProgram {
             grid: Arc::clone(&self.grid),
             is_waiting: self.is_waiting,
