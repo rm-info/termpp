@@ -1,12 +1,16 @@
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use crate::terminal::grid::{GridPerformer, TermEvent};
 use crate::terminal::pty::Pty;
 
 pub struct Emulator {
-    pub grid:     Arc<Mutex<GridPerformer>>,
-    pty:          Arc<Mutex<Pty>>,
-    pub event_rx: mpsc::Receiver<TermEvent>,
+    pub grid:         Arc<Mutex<GridPerformer>>,
+    pty:              Arc<Mutex<Pty>>,
+    pub event_rx:     mpsc::Receiver<TermEvent>,
+    /// Incremented each time the reader loop processes a chunk of PTY output.
+    /// Used by the Tick handler to detect new output without holding any lock.
+    pub output_count: Arc<AtomicU64>,
 }
 
 impl Emulator {
@@ -18,16 +22,18 @@ impl Emulator {
             GridPerformer::new(cols as usize, rows as usize, event_tx.clone()),
         ));
         let pty = Arc::new(Mutex::new(Pty::spawn(cols, rows)?));
+        let output_count = Arc::new(AtomicU64::new(0));
 
-        let grid_c = Arc::clone(&grid);
-        let pty_c  = Arc::clone(&pty);
-        let tx_c   = event_tx.clone();
+        let grid_c   = Arc::clone(&grid);
+        let pty_c    = Arc::clone(&pty);
+        let tx_c     = event_tx.clone();
+        let count_c  = Arc::clone(&output_count);
 
         // Move the reader out of the mutex so the blocking read doesn't hold the pty
         // lock — the writer (write_input) needs the pty lock and must not be starved.
         // spawn_blocking keeps the blocking read off the async executor threads.
         let mut reader = {
-            let mut p = pty_c.lock().unwrap();
+            let mut p = pty_c.lock().unwrap_or_else(|e| e.into_inner());
             // Replace the reader field with a dummy that immediately returns EOF,
             // so the real reader can be moved into the background thread.
             // We use a cursor over an empty slice as a zero-cost placeholder.
@@ -46,20 +52,21 @@ impl Emulator {
                     Ok(0) | Err(_) => { let _ = tx_c.try_send(TermEvent::Exited); break; }
                     Ok(n) => n,
                 };
-                let mut g = grid_c.lock().unwrap();
+                count_c.fetch_add(1, Ordering::Relaxed);
+                let mut g = grid_c.lock().unwrap_or_else(|e| e.into_inner());
                 for &byte in &buf[..n] { parser.advance(&mut *g, byte); }
             }
         });
 
-        Ok(Self { grid, pty, event_rx })
+        Ok(Self { grid, pty, event_rx, output_count })
     }
 
     pub fn write_input(&self, data: &[u8]) -> std::io::Result<()> {
-        self.pty.lock().unwrap().write_input(data)
+        self.pty.lock().unwrap_or_else(|e| e.into_inner()).write_input(data)
     }
 
     pub fn grid(&self) -> std::sync::MutexGuard<GridPerformer> {
-        self.grid.lock().unwrap()
+        self.grid.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub async fn next_event(&mut self) -> Option<TermEvent> {

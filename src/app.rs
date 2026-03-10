@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use iced::{Element, Subscription, Task};
 use iced::widget::{container, row};
@@ -14,13 +15,15 @@ use termpp::ui::pane_grid::TerminalPane;
 use termpp::ui::sidebar::{Sidebar, WorkspaceEntry};
 
 pub struct Termpp {
-    config:    Config,
-    layout:    Layout,
-    panes:     HashMap<usize, PaneState>,
-    emulators: HashMap<usize, Arc<Mutex<Emulator>>>,
-    active:    usize,
-    next_id:   usize,
-    detector:  NotificationDetector,
+    config:             Config,
+    layout:             Layout,
+    panes:              HashMap<usize, PaneState>,
+    emulators:          HashMap<usize, Arc<Mutex<Emulator>>>,
+    active:             usize,
+    next_id:            usize,
+    detector:           NotificationDetector,
+    /// Last observed output_count per pane, used to detect new PTY output on Tick.
+    last_output_counts: HashMap<usize, u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,19 +49,23 @@ pub fn boot() -> (Termpp, Task<Message>) {
     let detector = NotificationDetector::new(timeout);
 
     let mut app = Termpp {
-        layout:    Layout::new(id),
-        panes:     HashMap::from([(id, pane)]),
-        emulators: HashMap::new(),
-        active:    id,
-        next_id:   1,
+        layout:             Layout::new(id),
+        panes:              HashMap::from([(id, pane)]),
+        emulators:          HashMap::new(),
+        active:             id,
+        next_id:            1,
         detector,
         config,
+        last_output_counts: HashMap::new(),
     };
 
     // Emulator::start() is sync — uses tokio::spawn internally
     match Emulator::start(220, 50) {
-        Ok(emu) => { app.emulators.insert(id, Arc::new(Mutex::new(emu))); }
-        Err(e)  => { eprintln!("Failed to start emulator: {e}"); }
+        Ok(emu) => {
+            app.last_output_counts.insert(id, 0);
+            app.emulators.insert(id, Arc::new(Mutex::new(emu)));
+        }
+        Err(e) => { eprintln!("Failed to start emulator: {e}"); }
     }
 
     (app, Task::none())
@@ -71,6 +78,30 @@ pub fn title(_state: &Termpp) -> String {
 pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
     match message {
         Message::Tick => {
+            // Fix 1: Drain TermEvents from every emulator and forward to detector.
+            // Fix 2: Detect new PTY output via output_count and call on_output().
+            // We use try_lock() so a slow reader thread can't stall the UI tick.
+            for (&pane_id, emu_arc) in &state.emulators {
+                if let Ok(mut emu) = emu_arc.try_lock() {
+                    // Fix 2: check if PTY output_count advanced since last tick
+                    let current_count = emu.output_count.load(Ordering::Relaxed);
+                    let last_count = state.last_output_counts.get(&pane_id).copied().unwrap_or(0);
+                    if current_count != last_count {
+                        state.last_output_counts.insert(pane_id, current_count);
+                        if let Some(pane) = state.panes.get_mut(&pane_id) {
+                            pane.on_output();
+                        }
+                    }
+
+                    // Fix 1: drain queued TermEvents (Bell, OscNotify, Exited)
+                    while let Ok(event) = emu.event_rx.try_recv() {
+                        if let Some(pane) = state.panes.get_mut(&pane_id) {
+                            state.detector.process_event(event, pane);
+                        }
+                    }
+                }
+            }
+
             for pane in state.panes.values_mut() {
                 state.detector.check_idle(pane);
                 if pane.status != PaneStatus::Dead {
@@ -88,6 +119,13 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 let mut pane = PaneState::new(new_id, cwd.clone());
                 pane.git_branch = detect_git_branch(&cwd);
                 state.panes.insert(new_id, pane);
+                match Emulator::start(220, 50) {
+                    Ok(emu) => {
+                        state.last_output_counts.insert(new_id, 0);
+                        state.emulators.insert(new_id, Arc::new(Mutex::new(emu)));
+                    }
+                    Err(e) => { eprintln!("Failed to start emulator for pane {new_id}: {e}"); }
+                }
                 state.next_id += 1;
                 state.active = new_id;
             }
@@ -96,6 +134,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             if let Some(new_layout) = state.layout.remove(state.active) {
                 state.panes.remove(&state.active);
                 state.emulators.remove(&state.active);
+                state.last_output_counts.remove(&state.active);
                 state.layout = new_layout;
                 state.active = *state.layout.pane_ids().first().unwrap_or(&0);
             }
@@ -132,7 +171,8 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
             state.panes.get(&state.active),
             state.emulators.get(&state.active),
         ) {
-            let emu: std::sync::MutexGuard<'_, Emulator> = emu_arc.lock().unwrap();
+            let emu: std::sync::MutexGuard<'_, Emulator> =
+                emu_arc.lock().unwrap_or_else(|e| e.into_inner());
             let is_waiting = pane.status == PaneStatus::Waiting;
             TerminalPane::new(
                 Arc::clone(&emu.grid),
