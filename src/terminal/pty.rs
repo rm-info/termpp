@@ -1,10 +1,14 @@
-use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use portable_pty::{CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem};
 use std::io::{Read, Write};
 
 pub struct Pty {
     pub writer: Box<dyn Write + Send>,
     pub reader: Box<dyn Read + Send>,
     pub child:  Box<dyn portable_pty::Child + Send + Sync>,
+    // Keep master alive to prevent ClosePseudoConsole from being called prematurely.
+    // ConPTY is closed when Inner (behind Arc in master) drops; if master drops before
+    // the child finishes, the child is killed immediately.
+    _master: Box<dyn MasterPty + Send>,
 }
 
 impl Pty {
@@ -14,9 +18,12 @@ impl Pty {
         let mut cmd = CommandBuilder::new(default_shell());
         cmd.env("TERM", "xterm-256color");
         let child  = pair.slave.spawn_command(cmd)?;
+        // Drop slave before taking reader/writer from master; portable_pty docs recommend
+        // releasing slave handles after spawning.
+        drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
-        Ok(Self { writer, reader, child })
+        Ok(Self { writer, reader, child, _master: pair.master })
     }
 
     pub fn write_input(&mut self, data: &[u8]) -> std::io::Result<()> {
@@ -34,3 +41,4 @@ fn default_shell() -> String {
     #[cfg(not(windows))]
     return std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
 }
+
