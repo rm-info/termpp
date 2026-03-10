@@ -50,3 +50,19 @@ impl PaneState {
             && self.last_output_at.elapsed() >= duration
     }
 }
+
+/// Detect current git branch in `cwd` via git rev-parse subprocess.
+/// Returns None if directory is not in a git repo.
+pub fn detect_git_branch(cwd: &std::path::Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch.is_empty() || branch == "HEAD" { None } else { Some(branch) }
+    } else {
+        None
+    }
+}
