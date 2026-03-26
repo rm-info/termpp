@@ -214,16 +214,33 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             Space::new().height(0).into()
         };
 
-        mouse_area(
-            container(column![name_row, branch_row].spacing(2))
-                .width(Length::Fill)
-                .padding([6, 10])
-                .style(move |_| iced::widget::container::Style {
-                    background: Some(Background::Color(bg_color)),
+        let content = container(column![name_row, branch_row].spacing(2))
+            .width(Length::Fill)
+            .padding([6, 10])
+            .style(move |_| iced::widget::container::Style {
+                background: Some(Background::Color(bg_color)),
+                ..Default::default()
+            });
+
+        if is_active {
+            let accent = container(Space::new())
+                .width(3)
+                .height(Length::Fill)
+                .style(|_| iced::widget::container::Style {
+                    background: Some(Background::Color(AppTheme::ACCENT)),
                     ..Default::default()
-                })
-        )
-        .on_press(select_msg)
-        .into()
+                });
+            mouse_area(
+                row![accent, content]
+                    .width(Length::Fill)
+                    .height(Length::Shrink)
+            )
+            .on_press(select_msg)
+            .into()
+        } else {
+            mouse_area(content)
+                .on_press(select_msg)
+                .into()
+        }
     }
 }

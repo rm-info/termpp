@@ -11,4 +11,5 @@ impl Theme {
     pub const TEXT_PRIMARY: Color = Color { r: 0.89, g: 0.91, b: 0.94, a: 1.0 };
     pub const TEXT_DIM:     Color = Color { r: 0.39, g: 0.44, b: 0.53, a: 1.0 };
     pub const BADGE_ACTIVE: Color = Color { r: 0.20, g: 0.83, b: 0.60, a: 1.0 };
+    pub const ACCENT:       Color = Color { r: 0.33, g: 0.73, b: 1.0,  a: 1.0 };
 }
