@@ -25,6 +25,7 @@ pub struct Termpp {
     /// Last observed output_count per pane, used to detect new PTY output on Tick.
     last_output_counts: HashMap<usize, u64>,
     show_help:          bool,
+    renaming_pane:      Option<(usize, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +61,7 @@ pub fn boot() -> (Termpp, Task<Message>) {
         config,
         last_output_counts: HashMap::new(),
         show_help:          false,
+        renaming_pane:      None,
     };
 
     // Emulator::start() is sync — uses tokio::spawn internally
@@ -152,7 +154,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             state.show_help = !state.show_help;
             if state.show_help {
                 // Dismiss any active rename when opening the overlay
-                // (no renaming_pane field yet, placeholder for Task 5+)
+                state.renaming_pane = None;
             }
         }
     }
