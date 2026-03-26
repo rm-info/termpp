@@ -10,15 +10,21 @@
 
 ## v1.2 — Qualité et confort
 
-- [ ] **Couleurs 256/truecolor** — étendre `apply_sgr` dans `grid.rs` pour les séquences `38;5;n` (256) et `38;2;r;g;b` (truecolor)
-- [ ] **OSC 777 robustesse** — gérer les variantes à 3 params (title only) en plus des 4 params (title + body)
-- [ ] **Git branch async** — déplacer `detect_git_branch` dans une tâche tokio pour ne pas bloquer le thread UI toutes les 2s
-- [ ] **scroll_up O(1)** — remplacer `Vec::remove(0)` par `VecDeque` dans `grid.rs`
+- [x] **Couleurs 256/truecolor** — étendu dans `apply_sgr` (38;5;n, 48;5;n, 38;2;r;g;b, 48;2;r;g;b)
+- [x] **OSC 777 robustesse** — variante 3 params gérée
+- [x] **Git branch async** — `detect_git_branch` déplacé dans `tokio::task::spawn_blocking`
+- [x] **scroll_up O(1)** — `Vec::remove(0)` remplacé par `VecDeque::pop_front()`
+- [ ] **Split-view rendering** — afficher plusieurs panes simultanément (côte à côte ou haut/bas) selon la direction du split stockée dans `Layout`; le PTY resize devra tenir compte de la taille individuelle de chaque pane
+- [ ] **Renommer les panes** — double-clic sur le nom dans la sidebar pour éditer
+- [ ] **Sélection de pane à la souris** — clic sur une entrée de la sidebar pour activer le pane correspondant
+- [ ] **Ouvrir/fermer un pane depuis la sidebar** — bouton "+" pour créer, croix pour fermer
+- [x] **Auto-close après exit** — option `auto_close_on_exit` dans config (défaut: false)
 - [ ] **Option layout tabs-haut** — ajouter `layout = "tabs"` dans la config TOML
-- [ ] **Thèmes additionnels** — déverrouiller la validation de `theme` pour supporter d'autres valeurs
+- [x] **Thèmes additionnels** — validation de `theme` supprimée, toutes les valeurs acceptées
 
 ## v2 — Features avancées
 
+- [ ] **Déplacer les panes à la souris** — drag & drop dans la sidebar pour réorganiser l'ordre des panes
 - [ ] **CLI/Socket API** — named pipe (Windows) / Unix socket pour piloter l'app depuis des scripts
 - [ ] **Port detection** — scanner les ports ouverts et les afficher dans la sidebar
 - [ ] **Sauvegarde de session** — sauvegarder/restaurer les workspaces dans des fichiers `.tpp`

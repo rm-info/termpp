@@ -1,4 +1,6 @@
+use std::collections::VecDeque;
 use tokio::sync::mpsc;
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Color(pub u8, pub u8, pub u8);
@@ -35,13 +37,36 @@ impl Cell {
 pub enum TermEvent {
     Bell,
     OscNotify(String),
+    CwdChange(String),
     Exited,
 }
 
+fn ansi_256_color(n: u8) -> Color {
+    match n {
+        0..=7   => ANSI_COLORS[n as usize].clone(),
+        8..=15  => ANSI_BRIGHT[(n - 8) as usize].clone(),
+        16..=231 => {
+            let idx = n - 16;
+            let b = idx % 6;
+            let g = (idx / 6) % 6;
+            let r = idx / 36;
+            let comp = |v: u8| if v == 0 { 0u8 } else { 55 + v * 40 };
+            Color(comp(r), comp(g), comp(b))
+        }
+        232..=255 => {
+            let v = 8 + (n - 232) * 10;
+            Color(v, v, v)
+        }
+    }
+}
+
 pub struct GridPerformer {
-    cells: Vec<Vec<Cell>>,
+    cells: VecDeque<Vec<Cell>>,
     pub cursor_col: usize,
     pub cursor_row: usize,
+    saved_cursor: Option<(usize, usize)>,
+    /// Backup of primary screen cells+cursor when alternate screen is active.
+    alt_backup: Option<(VecDeque<Vec<Cell>>, usize, usize)>,
     cols: usize,
     rows: usize,
     current_fg: Color,
@@ -51,10 +76,11 @@ pub struct GridPerformer {
 
 impl GridPerformer {
     pub fn new(cols: usize, rows: usize, event_tx: mpsc::Sender<TermEvent>) -> Self {
-        let blank_row = vec![Cell::blank(); cols];
         Self {
-            cells: vec![blank_row; rows],
+            cells: (0..rows).map(|_| vec![Cell::blank(); cols]).collect(),
             cursor_col: 0, cursor_row: 0,
+            saved_cursor: None,
+            alt_backup: None,
             cols, rows,
             current_fg: DEFAULT_FG.clone(),
             current_bg: DEFAULT_BG.clone(),
@@ -70,8 +96,16 @@ impl GridPerformer {
     pub fn rows(&self) -> usize { self.rows }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.cells.resize_with(rows, || vec![Cell::blank(); cols]);
+        // Resize active screen
+        while self.cells.len() < rows { self.cells.push_back(vec![Cell::blank(); cols]); }
+        while self.cells.len() > rows { self.cells.pop_back(); }
         for row in &mut self.cells { row.resize_with(cols, Cell::blank); }
+        // Also resize the alternate screen backup if present
+        if let Some((alt, _, _)) = &mut self.alt_backup {
+            while alt.len() < rows { alt.push_back(vec![Cell::blank(); cols]); }
+            while alt.len() > rows { alt.pop_back(); }
+            for row in alt.iter_mut() { row.resize_with(cols, Cell::blank); }
+        }
         self.cols = cols;
         self.rows = rows;
         self.cursor_col = self.cursor_col.min(cols.saturating_sub(1));
@@ -80,9 +114,17 @@ impl GridPerformer {
 
     fn write_char(&mut self, c: char) {
         if self.cursor_col >= self.cols { self.cursor_col = 0; self.advance_row(); }
+        let w = UnicodeWidthChar::width(c).unwrap_or(1).max(1);
         self.cells[self.cursor_row][self.cursor_col] =
             Cell { ch: c, fg: self.current_fg.clone(), bg: self.current_bg.clone() };
         self.cursor_col += 1;
+        // Wide chars occupy two columns — mark the second as a continuation cell
+        // so rendering skips it for the glyph but still fills its background.
+        if w == 2 && self.cursor_col < self.cols {
+            self.cells[self.cursor_row][self.cursor_col] =
+                Cell { ch: '\0', fg: self.current_fg.clone(), bg: self.current_bg.clone() };
+            self.cursor_col += 1;
+        }
     }
 
     fn advance_row(&mut self) {
@@ -91,8 +133,8 @@ impl GridPerformer {
     }
 
     fn scroll_up(&mut self) {
-        self.cells.remove(0);
-        self.cells.push(vec![Cell::blank(); self.cols]);
+        self.cells.pop_front();
+        self.cells.push_back(vec![Cell::blank(); self.cols]);
     }
 
     fn erase_from_cursor(&mut self) {
@@ -114,18 +156,50 @@ impl GridPerformer {
         for col in 0..self.cols { self.cells[self.cursor_row][col] = Cell::blank(); }
     }
 
+    fn erase_line_to_cursor(&mut self) {
+        for col in 0..=self.cursor_col.min(self.cols - 1) {
+            self.cells[self.cursor_row][col] = Cell::blank();
+        }
+    }
+
+    fn erase_to_cursor(&mut self) {
+        for row in 0..self.cursor_row {
+            for col in 0..self.cols { self.cells[row][col] = Cell::blank(); }
+        }
+        self.erase_line_to_cursor();
+    }
+
     fn apply_sgr(&mut self, params: &vte::Params) {
-        for p in params.iter() {
-            match p[0] as u8 {
+        let all: Vec<u16> = params.iter().flat_map(|p| p.iter().copied()).collect();
+        let mut i = 0;
+        while i < all.len() {
+            match all[i] {
                 0        => { self.current_fg = DEFAULT_FG.clone(); self.current_bg = DEFAULT_BG.clone(); }
-                30..=37  => { self.current_fg = ANSI_COLORS[(p[0] - 30) as usize].clone(); }
+                30..=37  => { self.current_fg = ANSI_COLORS[(all[i] - 30) as usize].clone(); }
                 39       => { self.current_fg = DEFAULT_FG.clone(); }
-                40..=47  => { self.current_bg = ANSI_COLORS[(p[0] - 40) as usize].clone(); }
+                40..=47  => { self.current_bg = ANSI_COLORS[(all[i] - 40) as usize].clone(); }
                 49       => { self.current_bg = DEFAULT_BG.clone(); }
-                90..=97  => { self.current_fg = ANSI_BRIGHT[(p[0] - 90) as usize].clone(); }
-                100..=107 => { self.current_bg = ANSI_BRIGHT[(p[0] - 100) as usize].clone(); }
+                90..=97  => { self.current_fg = ANSI_BRIGHT[(all[i] - 90) as usize].clone(); }
+                100..=107 => { self.current_bg = ANSI_BRIGHT[(all[i] - 100) as usize].clone(); }
+                38 if i + 2 < all.len() && all[i + 1] == 5 => {
+                    self.current_fg = ansi_256_color(all[i + 2] as u8);
+                    i += 2;
+                }
+                38 if i + 4 < all.len() && all[i + 1] == 2 => {
+                    self.current_fg = Color(all[i+2] as u8, all[i+3] as u8, all[i+4] as u8);
+                    i += 4;
+                }
+                48 if i + 2 < all.len() && all[i + 1] == 5 => {
+                    self.current_bg = ansi_256_color(all[i + 2] as u8);
+                    i += 2;
+                }
+                48 if i + 4 < all.len() && all[i + 1] == 2 => {
+                    self.current_bg = Color(all[i+2] as u8, all[i+3] as u8, all[i+4] as u8);
+                    i += 4;
+                }
                 _ => {}
             }
+            i += 1;
         }
     }
 
@@ -150,7 +224,35 @@ impl vte::Perform for GridPerformer {
         }
     }
 
-    fn csi_dispatch(&mut self, params: &vte::Params, _intermediates: &[u8], _ignore: bool, c: char) {
+    fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], _ignore: bool, c: char) {
+        // Private-mode sequences (intermediate = '?')
+        if intermediates == [b'?'] {
+            let p = Self::fp(params);
+            match (p, c) {
+                // Alternate screen: ?47h / ?1047h / ?1049h  — enter alternate screen
+                (47 | 1047 | 1049, 'h') => {
+                    let blank: VecDeque<Vec<Cell>> =
+                        (0..self.rows).map(|_| vec![Cell::blank(); self.cols]).collect();
+                    let primary = std::mem::replace(&mut self.cells, blank);
+                    self.alt_backup = Some((primary, self.cursor_col, self.cursor_row));
+                    self.cursor_col = 0;
+                    self.cursor_row = 0;
+                    self.current_fg = DEFAULT_FG.clone();
+                    self.current_bg = DEFAULT_BG.clone();
+                }
+                // Alternate screen: ?47l / ?1047l / ?1049l  — exit alternate screen
+                (47 | 1047 | 1049, 'l') => {
+                    if let Some((primary, col, row)) = self.alt_backup.take() {
+                        self.cells = primary;
+                        self.cursor_col = col;
+                        self.cursor_row = row;
+                    }
+                }
+                _ => {} // cursor show/hide and other private modes ignored for now
+            }
+            return;
+        }
+
         let p1 = Self::fp(params);
         let p2 = Self::sp(params);
         match c {
@@ -162,8 +264,53 @@ impl vte::Perform for GridPerformer {
                 self.cursor_row = p1.saturating_sub(1).min(self.rows - 1);
                 self.cursor_col = p2.saturating_sub(1).min(self.cols - 1);
             }
-            'J' => match p1 { 0 => self.erase_from_cursor(), 2 | 3 => self.clear_screen(), _ => {} },
-            'K' => match p1 { 0 => self.erase_line_from_cursor(), 2 => self.erase_line(), _ => {} },
+            // Cursor movement
+            'G' => { self.cursor_col = p1.saturating_sub(1).min(self.cols - 1); }
+            'E' => { self.cursor_row = (self.cursor_row + p1.max(1)).min(self.rows - 1); self.cursor_col = 0; }
+            'F' => { self.cursor_row = self.cursor_row.saturating_sub(p1.max(1)); self.cursor_col = 0; }
+            // Erase
+            'J' => match p1 { 0 => self.erase_from_cursor(), 1 => self.erase_to_cursor(), 2 | 3 => self.clear_screen(), _ => {} },
+            'K' => match p1 { 0 => self.erase_line_from_cursor(), 1 => self.erase_line_to_cursor(), 2 => self.erase_line(), _ => {} },
+            'X' => {
+                // Erase p1 characters in place (no cursor movement)
+                let n = p1.max(1).min(self.cols - self.cursor_col);
+                for c in self.cursor_col..self.cursor_col + n { self.cells[self.cursor_row][c] = Cell::blank(); }
+            }
+            // Character insertion / deletion
+            'P' => {
+                // Delete p1 characters at cursor, shift rest of line left
+                let n = p1.max(1).min(self.cols - self.cursor_col);
+                let row = self.cursor_row;
+                for c in self.cursor_col..self.cols - n { self.cells[row][c] = self.cells[row][c + n].clone(); }
+                for c in self.cols - n..self.cols   { self.cells[row][c] = Cell::blank(); }
+            }
+            '@' => {
+                // Insert p1 blank characters at cursor, shift rest of line right
+                let n = p1.max(1).min(self.cols - self.cursor_col);
+                let row = self.cursor_row;
+                for c in (self.cursor_col..self.cols - n).rev() { self.cells[row][c + n] = self.cells[row][c].clone(); }
+                for c in self.cursor_col..self.cursor_col + n     { self.cells[row][c] = Cell::blank(); }
+            }
+            // Line insertion / deletion
+            'L' => {
+                let n = p1.max(1);
+                for _ in 0..n {
+                    self.cells.insert(self.cursor_row, vec![Cell::blank(); self.cols]);
+                    if self.cells.len() > self.rows { self.cells.pop_back(); }
+                }
+            }
+            'M' => {
+                let n = p1.max(1);
+                for _ in 0..n {
+                    if self.cursor_row < self.cells.len() {
+                        self.cells.remove(self.cursor_row);
+                        self.cells.push_back(vec![Cell::blank(); self.cols]);
+                    }
+                }
+            }
+            // Cursor save / restore (ANSI SCP/RCP)
+            's' => { self.saved_cursor = Some((self.cursor_col, self.cursor_row)); }
+            'u' => { if let Some((c, r)) = self.saved_cursor { self.cursor_col = c; self.cursor_row = r; } }
             'm' => { self.apply_sgr(params); }
             _ => {}
         }
@@ -172,18 +319,66 @@ impl vte::Perform for GridPerformer {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         if params.is_empty() { return; }
         let cmd = std::str::from_utf8(params[0]).unwrap_or("");
-        let notify = match cmd {
-            "9"   => params.get(1).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("").to_string(),
-            "777" => params.get(3).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("").to_string(),
+        match cmd {
+            "7" => {
+                // OSC 7: shell reports cwd as file URI, e.g. file:///C:/Users/rmollon
+                let raw = params.get(1)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("");
+                let path = if let Some(p) = raw.strip_prefix("file://") {
+                    // strip optional hostname before the path component
+                    p.find('/').map(|i| &p[i..]).unwrap_or(p)
+                } else {
+                    raw
+                };
+                // On Windows, strip leading '/' before drive letter (e.g. /C:/ -> C:/)
+                #[cfg(windows)]
+                let path = path.trim_start_matches('/');
+                let path = path.replace("%20", " ").replace("%3A", ":");
+                if !path.is_empty() {
+                    let _ = self.event_tx.try_send(TermEvent::CwdChange(path.to_string()));
+                }
+                return;
+            }
+            "9" => {
+                let notify = params.get(1).and_then(|b| std::str::from_utf8(b).ok()).unwrap_or("").to_string();
+                let _ = self.event_tx.try_send(TermEvent::OscNotify(notify));
+            }
+            "777" => {
+                // Format: 777;notify;title[;body] — use body if present, else title
+                let notify = params.get(3)
+                    .or_else(|| params.get(2))
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("")
+                    .to_string();
+                if !notify.is_empty() {
+                    let _ = self.event_tx.try_send(TermEvent::OscNotify(notify));
+                }
+            }
             _ => return,
-        };
-        let _ = self.event_tx.try_send(TermEvent::OscNotify(notify));
+        }
     }
 
     fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {}
     fn put(&mut self, _byte: u8) {}
     fn unhook(&mut self) {}
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            // DECSC / DECRC — save and restore cursor (DEC private sequences \x1b7 / \x1b8)
+            b'7' => { self.saved_cursor = Some((self.cursor_col, self.cursor_row)); }
+            b'8' => { if let Some((c, r)) = self.saved_cursor { self.cursor_col = c; self.cursor_row = r; } }
+            // RI — reverse index: scroll down one line if at top, else cursor up
+            b'M' => {
+                if self.cursor_row == 0 {
+                    self.cells.push_front(vec![Cell::blank(); self.cols]);
+                    if self.cells.len() > self.rows { self.cells.pop_back(); }
+                } else {
+                    self.cursor_row -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

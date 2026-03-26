@@ -4,14 +4,19 @@ use iced::mouse;
 use iced::widget::canvas::{self, Frame, Path, Stroke};
 use iced::{Color, Element, Point, Rectangle, Renderer, Size, Theme};
 
-use crate::terminal::grid::GridPerformer;
+use crate::terminal::grid::{GridPerformer, DEFAULT_BG};
 use crate::ui::theme::Theme as AppTheme;
+
+/// Inset from the blue border to where text begins (pixels).
+pub const TERM_PADDING: f32 = 8.0;
 
 /// A canvas program that renders a terminal grid.
 struct TerminalProgram {
     grid: Arc<Mutex<GridPerformer>>,
     is_waiting: bool,
     font_size: f32,
+    font_name: &'static str,
+    cursor_on: bool,
 }
 
 impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
@@ -27,41 +32,59 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
     ) -> Vec<canvas::Geometry<Renderer>> {
         let mut frame = Frame::new(renderer, bounds.size());
 
-        // Fill background
+        // Fill background with DEFAULT_BG so gaps between glyphs match cell backgrounds
         let bg_rect = Path::rectangle(Point::ORIGIN, bounds.size());
-        frame.fill(&bg_rect, AppTheme::PANE_BG);
+        frame.fill(&bg_rect, Color::from_rgb8(DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2));
 
         // Render grid cells
         if let Ok(grid) = self.grid.lock() {
             let cols = grid.cols();
             let rows = grid.rows();
 
-            // Compute character cell size based on available space
-            let cell_w = if cols > 0 { bounds.width / cols as f32 } else { self.font_size };
-            let cell_h = if rows > 0 { bounds.height / rows as f32 } else { self.font_size };
+            // Cell dimensions derived from font_size so glyphs never overlap.
+            // These match the ratios used at emulator startup in app.rs.
+            let cell_w = self.font_size * 0.6;
+            let cell_h = self.font_size * 1.2;
 
             for row in 0..rows {
                 for col in 0..cols {
                     let cell = grid.cell(col, row);
-                    if cell.ch == ' ' {
+                    let x = TERM_PADDING + col as f32 * cell_w;
+                    let y = TERM_PADDING + row as f32 * cell_h;
+
+                    // Draw non-default background
+                    let bg = &cell.bg;
+                    if (bg.0, bg.1, bg.2) != (DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2) {
+                        let rect = Path::rectangle(Point::new(x, y), Size::new(cell_w, cell_h));
+                        frame.fill(&rect, Color::from_rgb8(bg.0, bg.1, bg.2));
+                    }
+
+                    // Skip space and continuation cells (backgrounds already drawn above)
+                    if cell.ch == ' ' || cell.ch == '\0' {
                         continue;
                     }
 
-                    let x = col as f32 * cell_w;
-                    let y = row as f32 * cell_h;
-
-                    let fg = cell.fg.clone();
-                    let color = Color::from_rgb8(fg.0, fg.1, fg.2);
-
-                    let text = canvas::Text {
+                    let fg = &cell.fg;
+                    frame.fill_text(canvas::Text {
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),
-                        color,
-                        size: iced::Pixels(cell_h.min(self.font_size * 1.5)),
+                        color: Color::from_rgb8(fg.0, fg.1, fg.2),
+                        size: iced::Pixels(self.font_size),
+                        font: iced::Font {
+                            family: iced::font::Family::Name(self.font_name),
+                            ..iced::Font::MONOSPACE
+                        },
                         ..canvas::Text::default()
-                    };
-                    frame.fill_text(text);
+                    });
                 }
+            }
+
+            // Draw cursor: thin vertical bar, blinks with cursor_on
+            if self.cursor_on {
+                let cx = TERM_PADDING + grid.cursor_col as f32 * cell_w;
+                let cy = TERM_PADDING + grid.cursor_row as f32 * cell_h;
+                let bar = Path::rectangle(Point::new(cx, cy + cell_h - 3.0), Size::new(cell_w, 3.0));
+                frame.fill(&bar, iced::Color { r: 0.85, g: 0.90, b: 1.0, a: 1.0 });
             }
         }
 
@@ -87,11 +110,19 @@ pub struct TerminalPane {
     grid: Arc<Mutex<GridPerformer>>,
     is_waiting: bool,
     font_size: f32,
+    font_name: &'static str,
+    cursor_on: bool,
 }
 
 impl TerminalPane {
-    pub fn new(grid: Arc<Mutex<GridPerformer>>, is_waiting: bool, font_size: f32) -> Self {
-        Self { grid, is_waiting, font_size }
+    pub fn new(
+        grid: Arc<Mutex<GridPerformer>>,
+        is_waiting: bool,
+        font_size: f32,
+        font_name: &'static str,
+        cursor_on: bool,
+    ) -> Self {
+        Self { grid, is_waiting, font_size, font_name, cursor_on }
     }
 
     pub fn view<Message: 'static>(&self) -> Element<'static, Message> {
@@ -99,6 +130,8 @@ impl TerminalPane {
             grid: Arc::clone(&self.grid),
             is_waiting: self.is_waiting,
             font_size: self.font_size,
+            font_name: self.font_name,
+            cursor_on: self.cursor_on,
         })
         .width(iced::Length::Fill)
         .height(iced::Length::Fill)

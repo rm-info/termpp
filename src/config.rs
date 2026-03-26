@@ -9,13 +9,24 @@ pub struct Config {
     pub font_size: u16,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default = "default_shell")]
+    pub shell: String,
+    #[serde(default = "default_font_name")]
+    pub font_name: String,
     #[serde(default)]
     pub keybindings: Keybindings,
+    #[serde(default)]
+    pub auto_close_on_exit: bool,
 }
 
+fn default_font_name() -> String { "Cascadia Mono".to_string() }
 fn default_notification_timeout() -> u64 { 2 }
 fn default_font_size() -> u16 { 14 }
 fn default_theme() -> String { "dark".to_string() }
+#[cfg(windows)]
+fn default_shell() -> String { "pwsh.exe".to_string() }
+#[cfg(not(windows))]
+fn default_shell() -> String { std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string()) }
 
 #[derive(Debug, Clone, Hash, Deserialize)]
 pub struct Keybindings {
@@ -49,16 +60,13 @@ impl Default for Keybindings {
 pub enum ConfigError {
     Io(std::io::Error),
     Parse(toml::de::Error),
-    InvalidTheme(String),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            ConfigError::Io(e)           => write!(f, "Config I/O error: {}", e),
-            ConfigError::Parse(e)        => write!(f, "Config parse error: {}", e),
-            ConfigError::InvalidTheme(t) =>
-                write!(f, "Invalid theme '{}'. Only 'dark' is supported in v1.", t),
+            ConfigError::Io(e)    => write!(f, "Config I/O error: {}", e),
+            ConfigError::Parse(e) => write!(f, "Config parse error: {}", e),
         }
     }
 }
@@ -67,9 +75,6 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
         let config: Config = toml::from_str(&content).map_err(ConfigError::Parse)?;
-        if config.theme != "dark" {
-            return Err(ConfigError::InvalidTheme(config.theme));
-        }
         Ok(config)
     }
 
@@ -85,7 +90,10 @@ impl Default for Config {
             notification_timeout: default_notification_timeout(),
             font_size:            default_font_size(),
             theme:                default_theme(),
+            shell:                default_shell(),
+            font_name:            default_font_name(),
             keybindings:          Keybindings::default(),
+            auto_close_on_exit:   false,
         }
     }
 }

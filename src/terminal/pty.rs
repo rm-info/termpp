@@ -12,11 +12,12 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub fn spawn(cols: u16, rows: u16) -> anyhow::Result<Self> {
+    pub fn spawn(cols: u16, rows: u16, shell: &str, cwd: &std::path::Path) -> anyhow::Result<Self> {
         let sys  = NativePtySystem::default();
         let pair = sys.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
-        let mut cmd = CommandBuilder::new(default_shell());
+        let mut cmd = CommandBuilder::new(shell);
         cmd.env("TERM", "xterm-256color");
+        cmd.cwd(cwd);
         let child  = pair.slave.spawn_command(cmd)?;
         // Drop slave before taking reader/writer from master; portable_pty docs recommend
         // releasing slave handles after spawning.
@@ -33,12 +34,10 @@ impl Pty {
     pub fn try_wait(&mut self) -> Option<u32> {
         self.child.try_wait().ok().flatten().map(|s| s.exit_code())
     }
+
+    pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        self._master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+    }
 }
 
-fn default_shell() -> String {
-    #[cfg(windows)]
-    return std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
-    #[cfg(not(windows))]
-    return std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-}
 

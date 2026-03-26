@@ -15,6 +15,8 @@ pub struct PaneState {
     pub last_output_at: Instant,
     pub cwd: PathBuf,
     pub git_branch: Option<String>,
+    /// Optional user-defined name; if None, the cwd folder name is used.
+    pub pane_name: Option<String>,
 }
 
 impl PaneState {
@@ -25,6 +27,7 @@ impl PaneState {
             last_output_at: Instant::now(),
             cwd,
             git_branch: None,
+            pane_name: None,
         }
     }
 

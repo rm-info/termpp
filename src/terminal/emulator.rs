@@ -16,12 +16,12 @@ pub struct Emulator {
 impl Emulator {
     /// Synchronous constructor — uses tokio::spawn internally for the PTY reader.
     /// Can be called from iced's application boot function without block_on.
-    pub fn start(cols: u16, rows: u16) -> anyhow::Result<Self> {
+    pub fn start(cols: u16, rows: u16, shell: &str, cwd: &std::path::Path) -> anyhow::Result<Self> {
         let (event_tx, event_rx) = mpsc::channel(64);
         let grid = Arc::new(Mutex::new(
             GridPerformer::new(cols as usize, rows as usize, event_tx.clone()),
         ));
-        let pty = Arc::new(Mutex::new(Pty::spawn(cols, rows)?));
+        let pty = Arc::new(Mutex::new(Pty::spawn(cols, rows, shell, cwd)?));
         let output_count = Arc::new(AtomicU64::new(0));
 
         let grid_c   = Arc::clone(&grid);
@@ -44,7 +44,7 @@ impl Emulator {
             real_reader
         };
 
-        tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             let mut parser = vte::Parser::new();
             let mut buf    = [0u8; 4096];
             loop {
@@ -65,8 +65,21 @@ impl Emulator {
         self.pty.lock().unwrap_or_else(|e| e.into_inner()).write_input(data)
     }
 
-    pub fn grid(&self) -> std::sync::MutexGuard<GridPerformer> {
+    pub fn grid(&self) -> std::sync::MutexGuard<'_, GridPerformer> {
         self.grid.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Returns true if the child process has exited.
+    /// Used as a fallback for platforms where PTY EOF isn't reliable on exit.
+    pub fn is_exited(&self) -> bool {
+        self.pty.try_lock()
+            .map(|mut pty| pty.try_wait().is_some())
+            .unwrap_or(false)
+    }
+
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let _ = self.pty.lock().unwrap_or_else(|e| e.into_inner()).resize(cols, rows);
+        self.grid.lock().unwrap_or_else(|e| e.into_inner()).resize(cols as usize, rows as usize);
     }
 
     pub async fn next_event(&mut self) -> Option<TermEvent> {

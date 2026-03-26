@@ -14,6 +14,7 @@ impl NotificationDetector {
     pub fn process_event(&self, event: TermEvent, pane: &mut PaneState) {
         match event {
             TermEvent::Bell | TermEvent::OscNotify(_) => pane.on_notify(),
+            TermEvent::CwdChange(_) => {} // cwd update is handled upstream in app.rs
             TermEvent::Exited => pane.on_exit(),
         }
     }
