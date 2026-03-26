@@ -24,6 +24,7 @@ pub struct Termpp {
     detector:           NotificationDetector,
     /// Last observed output_count per pane, used to detect new PTY output on Tick.
     last_output_counts: HashMap<usize, u64>,
+    show_help:          bool,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ pub enum Message {
     SplitPane(SplitDirection),
     ClosePane,
     FocusNext,
+    ToggleHelp,
 }
 
 pub fn boot() -> (Termpp, Task<Message>) {
@@ -57,6 +59,7 @@ pub fn boot() -> (Termpp, Task<Message>) {
         detector,
         config,
         last_output_counts: HashMap::new(),
+        show_help:          false,
     };
 
     // Emulator::start() is sync — uses tokio::spawn internally
@@ -143,6 +146,13 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             let ids = state.layout.pane_ids();
             if let Some(pos) = ids.iter().position(|&id| id == state.active) {
                 state.active = ids[(pos + 1) % ids.len()];
+            }
+        }
+        Message::ToggleHelp => {
+            state.show_help = !state.show_help;
+            if state.show_help {
+                // Dismiss any active rename when opening the overlay
+                // (no renaming_pane field yet, placeholder for Task 5+)
             }
         }
     }
