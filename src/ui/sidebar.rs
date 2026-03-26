@@ -1,4 +1,4 @@
-use iced::widget::{column, container, row, text, Space};
+use iced::widget::{column, container, mouse_area, row, text, Space};
 use iced::{Background, Element, Length};
 
 use crate::multiplexer::pane::{PaneState, PaneStatus};
@@ -39,11 +39,12 @@ pub struct SidebarStyle;
 pub struct Sidebar<Message> {
     workspaces: Vec<WorkspaceEntry>,
     active_id: usize,
-    _phantom: std::marker::PhantomData<Message>,
+    on_help:   Message,
+    _phantom:  std::marker::PhantomData<Message>,
 }
 
 impl<Message: Clone + 'static> Sidebar<Message> {
-    pub fn new(workspaces: &[WorkspaceEntry], active_id: usize) -> Self {
+    pub fn new(workspaces: &[WorkspaceEntry], active_id: usize, on_help: Message) -> Self {
         let owned: Vec<WorkspaceEntry> = workspaces.iter().map(|ws| WorkspaceEntry {
             id: ws.id,
             name: ws.name.clone(),
@@ -54,6 +55,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
         Self {
             workspaces: owned,
             active_id,
+            on_help,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -65,16 +67,32 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             .map(|ws| self.render_entry(ws))
             .collect();
 
-        let list = column(entries).spacing(1);
+        let help_msg = self.on_help.clone();
+        let help_btn: Element<'static, Message> = mouse_area(
+            container(text("?").color(AppTheme::TEXT_DIM).size(16))
+                .width(Length::Fill)
+                .padding([6, 10])
+                .style(|_| iced::widget::container::Style {
+                    background: Some(Background::Color(AppTheme::SIDEBAR_BG)),
+                    ..Default::default()
+                })
+        )
+        .on_press(help_msg)
+        .into();
 
-        container(list)
-            .width(200)
-            .height(Length::Fill)
-            .style(|_theme| iced::widget::container::Style {
-                background: Some(Background::Color(AppTheme::SIDEBAR_BG)),
-                ..Default::default()
-            })
-            .into()
+        container(
+            column(entries)
+                .spacing(1)
+                .push(Space::new().height(Length::Fill))
+                .push(help_btn)
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Background::Color(AppTheme::SIDEBAR_BG)),
+            ..Default::default()
+        })
+        .into()
     }
 
     fn render_entry(&self, ws: &WorkspaceEntry) -> Element<'static, Message> {

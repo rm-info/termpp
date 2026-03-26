@@ -11,6 +11,7 @@ use termpp::multiplexer::layout::{Layout, SplitDirection};
 use termpp::multiplexer::notification::NotificationDetector;
 use termpp::multiplexer::pane::{PaneState, PaneStatus, detect_git_branch};
 use termpp::terminal::emulator::Emulator;
+use termpp::ui::help_overlay::help_overlay;
 use termpp::ui::pane_grid::TerminalPane;
 use termpp::ui::sidebar::{Sidebar, WorkspaceEntry};
 
@@ -307,7 +308,7 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
     // Sidebar::new owns its data; returned Element<'static, Message> does not
     // borrow workspace_entries.
     let sidebar: Element<'static, Message> =
-        Sidebar::<Message>::new(&workspace_entries, state.active).view();
+        Sidebar::<Message>::new(&workspace_entries, state.active, Message::ToggleHelp).view();
 
     // TerminalPane::view() returns Element<'static, Message> (Arc clone, no borrows).
     let pane_view: Element<'static, Message> =
@@ -329,8 +330,18 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
             iced::widget::text("No pane").into()
         };
 
-    container(row![sidebar, pane_view])
+    let base: Element<'static, Message> = container(row![sidebar, pane_view])
         .width(Length::Fill)
         .height(Length::Fill)
+        .into();
+
+    if state.show_help {
+        iced::widget::stack![
+            base,
+            help_overlay(&state.config.keybindings, Message::ToggleHelp)
+        ]
         .into()
+    } else {
+        base
+    }
 }
