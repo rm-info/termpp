@@ -36,38 +36,93 @@ Message::ToggleHelp => {
 
 | Trigger | Condition | Effect |
 |---|---|---|
-| `F1` key | always | `ToggleHelp` |
-| `Escape` key | `show_help == true` | `ToggleHelp` (checked before `CancelRename`) |
+| `F1` key | always (even during rename) | `ToggleHelp` |
+| `Escape` key | `show_help == true` | `ToggleHelp` |
+| `Escape` key | `is_renaming == true`, `show_help == false` | `CancelRename` |
 | `?` sidebar button | click | `ToggleHelp` |
 | `×` in popup | click | `ToggleHelp` |
 
-The existing `Escape` handler in `subscription()` already handles `CancelRename`. The new check for `show_help` is inserted before it:
+### Subscription capture tuple
+
+The `.with(...)` tuple in `subscription()` must be expanded from `(bindings, is_renaming)` to `(bindings, is_renaming, show_help)`. The closure's explicit type annotation (currently `((termpp::config::Keybindings, bool), iced::Event)`) must also be updated to `((termpp::config::Keybindings, bool, bool), iced::Event)`, and the destructuring pattern from `((bindings, is_renaming), event)` to `((bindings, is_renaming, show_help), event)`.
+
+### Key dispatch order (inside the filter_map closure)
+
 ```rust
-if is_renaming { ... return CancelRename }
-// NEW:
-if matches F1 key → return ToggleHelp
-// existing bindings...
+// 1. F1 always triggers ToggleHelp — must be BEFORE the is_renaming guard
+if key == Named::F1 {
+    return Some(Message::ToggleHelp);
+}
+
+// 2. During rename: only Escape passes through (cancels rename)
+if is_renaming {
+    if key == Named::Escape {
+        return Some(Message::CancelRename);
+    }
+    return None;
+}
+
+// 3. Help overlay open: only Escape passes through (closes help)
+if show_help {
+    if key == Named::Escape {
+        return Some(Message::ToggleHelp);
+    }
+    return None; // suppress all other keys — don't reach PTY
+}
+
+// 4. Normal key dispatch (existing binding checks + key_to_bytes)
 ```
 
-When `show_help` is `true`, all key events other than `F1` and `Escape` are suppressed (return `None`) so keystrokes don't reach the PTY.
+### Compound state (show_help + is_renaming simultaneously)
+
+Opening the help overlay while a rename is in progress is prevented: the `ToggleHelp` update handler also clears `renaming_pane`:
+```rust
+Message::ToggleHelp => {
+    state.show_help = !state.show_help;
+    if state.show_help {
+        state.renaming_pane = None; // dismiss rename when opening help
+    }
+}
+```
+This ensures the two states never coexist.
 
 ## Sidebar Changes (`src/ui/sidebar.rs`)
 
-Add `on_help: Message` field to `Sidebar<Message>`, matching the existing `on_new: Message` pattern.
+Add `on_help: Message` field to `Sidebar<Message>`, matching the existing `on_new: Message` pattern (plain value, not a function pointer).
 
-Layout of the sidebar column becomes:
+The `?` button uses identical style to `+`: `TEXT_DIM`, size 16, padding `[6, 10]`, background `SIDEBAR_BG`. It uses the same `mouse_area(container(text("?")))` pattern already established in the file.
+
+### `view()` column restructuring
+
+The current `view()` builds: `column(entries).push(new_btn)` wrapped in a `container`.
+
+It must be restructured to:
+```rust
+column(entries)
+    .push(new_btn)
+    .push(Space::new().height(Length::Fill))  // pushes help btn to bottom
+    .push(help_btn)
+```
+
+The outer `container` is unchanged. The resulting layout:
 ```
 [workspace entry 0]
 [workspace entry 1]
 ...
 [+ new pane button]
-<Space::new().height(Length::Fill)>   ← pushes ? to bottom
+<flexible space>
 [? help button]
 ```
 
-The `?` button uses identical style to `+`: `TEXT_DIM`, size 16, padding `[6, 10]`, background `SIDEBAR_BG`.
+### Call site
+
+`Sidebar::new()` is called in `src/app.rs::view()` (not `main.rs`). Add `Message::ToggleHelp` as the `on_help` argument. The `Sidebar::new()` constructor gains one additional parameter at the end: `on_help: Message`.
 
 ## Help Overlay Widget (`src/ui/help_overlay.rs`)
+
+`iced::widget::stack![]` is available in `iced_widget-0.14.2` (confirmed in `iced_widget/src/helpers.rs`). No additional feature flag needed.
+
+
 
 A single free function:
 ```rust
@@ -75,6 +130,12 @@ pub fn help_overlay<Message: Clone + 'static>(
     keybindings: &Keybindings,
     on_close: Message,
 ) -> Element<'static, Message>
+```
+
+**`'static` constraint:** The return type is `Element<'static, Message>`. All string data from `keybindings` must be cloned into owned `String` values (via `.clone()` or `format!()`) before being passed to `text(...)` widgets, so that no lifetime from `&Keybindings` escapes into the returned element. Example:
+```rust
+text(keybindings.split_horizontal.clone())  // correct
+text(keybindings.split_horizontal.as_str()) // WRONG: borrows from argument
 ```
 
 ### Visual structure
@@ -121,10 +182,10 @@ if state.show_help {
 
 | File | Change |
 |---|---|
-| `src/app.rs` | Add `show_help` field, `ToggleHelp` message, update handler, F1 + Escape key handling, view stack |
-| `src/ui/sidebar.rs` | Add `on_help` field + `?` button at bottom |
+| `src/app.rs` | Add `show_help` field, `ToggleHelp` message + update handler, subscription tuple expansion + closure type annotation, F1/Escape key dispatch, view stack, pass `on_help` to `Sidebar::new()` |
+| `src/ui/sidebar.rs` | Add `on_help` field + `?` button + `Space::fill()` (Space already imported) |
 | `src/ui/help_overlay.rs` | New file: `help_overlay()` function |
-| `src/main.rs` or call site | Pass `on_help: Message::ToggleHelp` to `Sidebar::new()` |
+| `src/ui/mod.rs` | Add `pub mod help_overlay;` |
 
 ## Non-Goals
 
