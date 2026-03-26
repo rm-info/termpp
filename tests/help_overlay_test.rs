@@ -18,6 +18,8 @@ fn help_overlay_uses_keybinding_strings() {
         split_horizontal: "ctrl+shift+test_h".to_string(),
         split_vertical:   "ctrl+shift+test_v".to_string(),
         pane_next:        "ctrl+shift+test_n".to_string(),
+        pane_prev:        "ctrl+shift+test_p".to_string(),
+        new_pane:         "ctrl+shift+test_np".to_string(),
         close_pane:       "ctrl+shift+test_w".to_string(),
     };
     let _el: iced::Element<'static, ()> = help_overlay(&kb, ());
