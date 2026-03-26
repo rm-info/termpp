@@ -60,6 +60,7 @@ pub enum Message {
     SplitPane(SplitDirection),
     ClosePane,
     FocusNext,
+    FocusPrev,
     ToggleHelp,
     Resized(f32, f32),
     SidebarDragStart,
@@ -279,6 +280,12 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 state.active = ids[(pos + 1) % ids.len()];
             }
         }
+        Message::FocusPrev => {
+            let ids = state.layout.pane_ids();
+            if let Some(pos) = ids.iter().position(|&id| id == state.active) {
+                state.active = ids[(pos + ids.len() - 1) % ids.len()];
+            }
+        }
         Message::ToggleHelp => {
             state.show_help = !state.show_help;
             if state.show_help {
@@ -493,6 +500,12 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                 if matches_binding(&key, modifiers, &bindings.pane_next) {
                     return Some(Message::FocusNext);
                 }
+                if matches_binding(&key, modifiers, &bindings.pane_prev) {
+                    return Some(Message::FocusPrev);
+                }
+                if matches_binding(&key, modifiers, &bindings.new_pane) {
+                    return Some(Message::NewPane);
+                }
                 if matches_binding(&key, modifiers, &bindings.close_pane) {
                     return Some(Message::ClosePane);
                 }
@@ -645,5 +658,56 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
         .into()
     } else {
         base
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_binding;
+    use iced::keyboard::{Key, Modifiers};
+    use iced::keyboard::key::Named;
+
+    fn ctrl() -> Modifiers { Modifiers::CTRL }
+    fn ctrl_shift() -> Modifiers { Modifiers::CTRL | Modifiers::SHIFT }
+
+    #[test]
+    fn matches_ctrl_tab_for_pane_next() {
+        assert!(matches_binding(&Key::Named(Named::Tab), ctrl(), "ctrl+tab"));
+    }
+
+    #[test]
+    fn matches_ctrl_shift_tab_for_pane_prev() {
+        assert!(matches_binding(&Key::Named(Named::Tab), ctrl_shift(), "ctrl+shift+tab"));
+    }
+
+    #[test]
+    fn ctrl_tab_does_not_match_ctrl_shift_n() {
+        // Regression: old pane_next default "ctrl+shift+n" must NOT match Ctrl+Tab
+        assert!(!matches_binding(&Key::Named(Named::Tab), ctrl(), "ctrl+shift+n"));
+    }
+
+    #[test]
+    fn focus_prev_wraps_from_first_to_last() {
+        // Pure logic test for the wrapping formula — no app state needed
+        let len = 3;
+        let pos = 0;
+        let prev = (pos + len - 1) % len;
+        assert_eq!(prev, 2, "wrapping from index 0 in a 3-pane layout should give index 2");
+    }
+
+    #[test]
+    fn focus_prev_middle_position() {
+        let len = 3;
+        let pos = 1;
+        let prev = (pos + len - 1) % len;
+        assert_eq!(prev, 0);
+    }
+
+    #[test]
+    fn focus_prev_single_pane_wraps_to_self() {
+        let len = 1;
+        let pos = 0;
+        let prev = (pos + len - 1) % len;
+        assert_eq!(prev, 0);
     }
 }
