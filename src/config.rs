@@ -17,7 +17,7 @@ fn default_notification_timeout() -> u64 { 2 }
 fn default_font_size() -> u16 { 14 }
 fn default_theme() -> String { "dark".to_string() }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct Keybindings {
     #[serde(default = "default_split_h")]
     pub split_horizontal: String,
