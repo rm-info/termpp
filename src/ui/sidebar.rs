@@ -86,7 +86,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
                 .push(Space::new().height(Length::Fill))
                 .push(help_btn)
         )
-        .width(Length::Fill)
+        .width(200)
         .height(Length::Fill)
         .style(|_| iced::widget::container::Style {
             background: Some(Background::Color(AppTheme::SIDEBAR_BG)),
