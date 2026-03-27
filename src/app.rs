@@ -462,10 +462,11 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     let bindings    = state.config.keybindings.clone();
     let is_renaming = state.renaming_pane.is_some();
     let show_help   = state.show_help;
+    let active_id   = state.active;
 
     let keyboard = iced::event::listen()
-        .with((bindings, is_renaming, show_help))
-        .filter_map(|((bindings, is_renaming, show_help), event): ((termpp::config::Keybindings, bool, bool), iced::Event)| -> Option<Message> {
+        .with((bindings, is_renaming, show_help, active_id))
+        .filter_map(|((bindings, is_renaming, show_help, active_id), event): ((termpp::config::Keybindings, bool, bool, usize), iced::Event)| -> Option<Message> {
             if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, text, .. }) = event {
                 use iced::keyboard::key::Named;
 
@@ -508,6 +509,9 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                 }
                 if matches_binding(&key, modifiers, &bindings.close_pane) {
                     return Some(Message::ClosePane);
+                }
+                if matches_binding(&key, modifiers, &bindings.rename_pane) {
+                    return Some(Message::StartRename(active_id));
                 }
                 let bytes = key_to_bytes(&key, modifiers, text.as_deref());
                 if bytes.is_empty() { None } else { Some(Message::KeyInput(bytes)) }

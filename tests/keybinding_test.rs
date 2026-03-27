@@ -17,3 +17,9 @@ fn default_new_pane_is_ctrl_shift_n() {
     let kb = Keybindings::default();
     assert_eq!(kb.new_pane, "ctrl+shift+n");
 }
+
+#[test]
+fn default_rename_pane_is_ctrl_shift_r() {
+    let kb = Keybindings::default();
+    assert_eq!(kb.rename_pane, "ctrl+shift+r");
+}

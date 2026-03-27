@@ -21,6 +21,7 @@ fn help_overlay_uses_keybinding_strings() {
         pane_prev:        "ctrl+shift+test_p".to_string(),
         new_pane:         "ctrl+shift+test_np".to_string(),
         close_pane:       "ctrl+shift+test_w".to_string(),
+        rename_pane:      "ctrl+shift+test_r".to_string(),
     };
     let _el: iced::Element<'static, ()> = help_overlay(&kb, ());
     drop(kb); // kb is dropped before _el — would fail if _el borrowed from kb

@@ -15,6 +15,7 @@ pub fn help_overlay<Message: Clone + 'static>(
         ("Pane suivant",        keybindings.pane_next.clone()),
         ("Pane précédent",      keybindings.pane_prev.clone()),
         ("Nouveau pane",        keybindings.new_pane.clone()),
+        ("Renommer le pane",    keybindings.rename_pane.clone()),
         ("Fermer le pane",      keybindings.close_pane.clone()),
         ("Aide",                "F1".to_string()),
     ];
