@@ -13,6 +13,7 @@ pub struct WorkspaceEntry {
     pub git_branch: Option<String>,
     pub cwd: String,
     pub has_waiting: bool,
+    pub terminal_title: Option<String>,
 }
 
 impl WorkspaceEntry {
@@ -30,6 +31,7 @@ impl WorkspaceEntry {
             git_branch: pane.git_branch.clone(),
             cwd: pane.cwd.to_string_lossy().into_owned(),
             has_waiting: pane.status == PaneStatus::Waiting,
+            terminal_title: pane.terminal_title.clone(),
         }
     }
 }
@@ -70,6 +72,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             git_branch: ws.git_branch.clone(),
             cwd: ws.cwd.clone(),
             has_waiting: ws.has_waiting,
+            terminal_title: ws.terminal_title.clone(),
         }).collect();
         Self {
             workspaces: owned,
@@ -214,7 +217,13 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             Space::new().height(0).into()
         };
 
-        let content = container(column![name_row, branch_row].spacing(2))
+        let title_row: Element<'static, Message> = if let Some(title) = &ws.terminal_title {
+            text(format!("  {title}")).color(AppTheme::TEXT_DIM).size(11).into()
+        } else {
+            Space::new().height(0).into()
+        };
+
+        let content = container(column![name_row, branch_row, title_row].spacing(2))
             .width(Length::Fill)
             .padding([6, 10])
             .style(move |_| iced::widget::container::Style {

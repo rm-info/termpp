@@ -38,6 +38,7 @@ pub enum TermEvent {
     Bell,
     OscNotify(String),
     CwdChange(String),
+    TitleChange(String),
     Exited,
 }
 
@@ -320,6 +321,16 @@ impl vte::Perform for GridPerformer {
         if params.is_empty() { return; }
         let cmd = std::str::from_utf8(params[0]).unwrap_or("");
         match cmd {
+            "0" | "2" => {
+                // OSC 0/2: set window/tab title (e.g. used by Claude Code, vim, etc.)
+                let title = params.get(1)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .unwrap_or("")
+                    .to_string();
+                if !title.is_empty() {
+                    let _ = self.event_tx.try_send(TermEvent::TitleChange(title));
+                }
+            }
             "7" => {
                 // OSC 7: shell reports cwd as file URI, e.g. file:///C:/Users/rmollon
                 let raw = params.get(1)

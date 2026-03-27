@@ -17,6 +17,8 @@ pub struct PaneState {
     pub git_branch: Option<String>,
     /// Optional user-defined name; if None, the cwd folder name is used.
     pub pane_name: Option<String>,
+    /// Title set by the running application via OSC 0/2 escape sequence.
+    pub terminal_title: Option<String>,
 }
 
 impl PaneState {
@@ -28,6 +30,7 @@ impl PaneState {
             cwd,
             git_branch: None,
             pane_name: None,
+            terminal_title: None,
         }
     }
 

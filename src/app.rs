@@ -145,10 +145,16 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                     }
                     while let Ok(event) = emu.event_rx.try_recv() {
                         if let Some(pane) = state.panes.get_mut(&pane_id) {
-                            if let termpp::terminal::grid::TermEvent::CwdChange(path) = event {
-                                pane.cwd = std::path::PathBuf::from(path);
-                            } else {
-                                state.detector.process_event(event, pane);
+                            match event {
+                                termpp::terminal::grid::TermEvent::CwdChange(path) => {
+                                    pane.cwd = std::path::PathBuf::from(path);
+                                }
+                                termpp::terminal::grid::TermEvent::TitleChange(title) => {
+                                    pane.terminal_title = Some(title);
+                                }
+                                other => {
+                                    state.detector.process_event(other, pane);
+                                }
                             }
                         }
                     }
