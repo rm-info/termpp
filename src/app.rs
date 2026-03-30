@@ -73,6 +73,18 @@ pub enum Message {
     RenameChanged(String),
     CommitRename,
     CancelRename,
+    // Tab-level
+    FocusTabNext,
+    FocusTabPrev,
+    SelectTab(usize),
+    CloseTab(usize),
+    NewTabIn(usize),          // arg = workspace_id to create tab in
+    StartRenameTab(usize),    // arg = tab_id
+    // Workspace-level
+    FocusWorkspaceNext,
+    FocusWorkspacePrev,
+    NewWorkspace,
+    ToggleWorkspace(usize),   // arg = workspace_id, toggles collapsed
 }
 
 pub fn boot() -> (Termpp, Task<Message>) {
@@ -363,6 +375,16 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         Message::CancelRename => {
             state.renaming_pane = None;
         }
+        Message::FocusTabNext       => {}
+        Message::FocusTabPrev       => {}
+        Message::SelectTab(_)       => {}
+        Message::CloseTab(_)        => {}
+        Message::NewTabIn(_)        => {}
+        Message::StartRenameTab(_)  => {}
+        Message::FocusWorkspaceNext => {}
+        Message::FocusWorkspacePrev => {}
+        Message::NewWorkspace       => {}
+        Message::ToggleWorkspace(_) => {}
     }
     Task::none()
 }
@@ -469,10 +491,11 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     let is_renaming = state.renaming_pane.is_some();
     let show_help   = state.show_help;
     let active_id   = state.active;
+    let active_workspace_id = state.active; // placeholder — will become state.active_workspace after Task 4
 
     let keyboard = iced::event::listen()
-        .with((bindings, is_renaming, show_help, active_id))
-        .filter_map(|((bindings, is_renaming, show_help, active_id), event): ((termpp::config::Keybindings, bool, bool, usize), iced::Event)| -> Option<Message> {
+        .with((bindings, is_renaming, show_help, active_id, active_workspace_id))
+        .filter_map(|((bindings, is_renaming, show_help, active_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
             if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, text, .. }) = event {
                 use iced::keyboard::key::Named;
 
@@ -517,7 +540,25 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                     return Some(Message::ClosePane);
                 }
                 if matches_binding(&key, modifiers, &bindings.rename_pane) {
-                    return Some(Message::StartRename(active_id));
+                    return Some(Message::StartRenameTab(active_id));
+                }
+                if matches_binding(&key, modifiers, &bindings.tab_next) {
+                    return Some(Message::FocusTabNext);
+                }
+                if matches_binding(&key, modifiers, &bindings.tab_prev) {
+                    return Some(Message::FocusTabPrev);
+                }
+                if matches_binding(&key, modifiers, &bindings.workspace_next) {
+                    return Some(Message::FocusWorkspaceNext);
+                }
+                if matches_binding(&key, modifiers, &bindings.workspace_prev) {
+                    return Some(Message::FocusWorkspacePrev);
+                }
+                if matches_binding(&key, modifiers, &bindings.tab_new) {
+                    return Some(Message::NewTabIn(active_workspace_id));
+                }
+                if matches_binding(&key, modifiers, &bindings.workspace_new) {
+                    return Some(Message::NewWorkspace);
                 }
                 let bytes = key_to_bytes(&key, modifiers, text.as_deref());
                 if bytes.is_empty() { None } else { Some(Message::KeyInput(bytes)) }
@@ -719,5 +760,21 @@ mod tests {
         let pos = 0;
         let prev = (pos + len - 1) % len;
         assert_eq!(prev, 0);
+    }
+
+    #[test]
+    fn matches_ctrl_pagedown_for_tab_next() {
+        use iced::keyboard::key::Named;
+        assert!(matches_binding(&Key::Named(Named::PageDown), ctrl(), "ctrl+pagedown"));
+    }
+
+    #[test]
+    fn matches_ctrl_shift_w_for_workspace_new() {
+        assert!(matches_binding(&Key::Character("w".into()), ctrl_shift(), "ctrl+shift+w"));
+    }
+
+    #[test]
+    fn matches_ctrl_shift_t_for_tab_new() {
+        assert!(matches_binding(&Key::Character("t".into()), ctrl_shift(), "ctrl+shift+t"));
     }
 }
