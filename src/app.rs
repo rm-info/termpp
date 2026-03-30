@@ -64,8 +64,6 @@ pub enum Message {
     SidebarDragStart,
     SidebarDragged(f32),
     SidebarDragEnd,
-    FocusPaneById(usize),
-    ClosePaneById(usize),
     NewPane,
     RenameChanged(String),
     CommitRename,
@@ -417,37 +415,6 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 state.renaming_tab = None;
             }
         }
-        Message::FocusPaneById(id) => {
-            let tab = state.active_tab_mut();
-            if tab.panes.contains_key(&id) {
-                tab.active_pane = id;
-            }
-        }
-        Message::ClosePaneById(target) => {
-            let wi = state.active_ws_idx();
-            let ti = state.workspaces[wi].active_tab_idx();
-            let tab = &mut state.workspaces[wi].tabs[ti];
-            if let Some(new_layout) = tab.layout.remove(target) {
-                tab.panes.remove(&target);
-                tab.emulators.remove(&target);
-                tab.last_output_counts.remove(&target);
-                tab.layout = new_layout;
-                if tab.active_pane == target {
-                    tab.active_pane = *tab.layout.pane_ids().first().unwrap_or(&0);
-                }
-            } else {
-                state.workspaces[wi].tabs.remove(ti);
-                if state.workspaces[wi].tabs.is_empty() {
-                    state.workspaces.remove(wi);
-                    if state.workspaces.is_empty() { std::process::exit(0); }
-                    let new_wi = wi.min(state.workspaces.len() - 1);
-                    state.active_workspace = state.workspaces[new_wi].id;
-                } else {
-                    let new_ti = ti.min(state.workspaces[wi].tabs.len() - 1);
-                    state.workspaces[wi].active_tab = state.workspaces[wi].tabs[new_ti].id;
-                }
-            }
-        }
         Message::NewPane => {
             let (emu_cols, emu_rows) = state.emu_size();
             let shell = state.config.shell.clone();
@@ -734,12 +701,12 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     let bindings    = state.config.keybindings.clone();
     let is_renaming         = state.renaming_tab.is_some();
     let show_help   = state.show_help;
-    let active_id           = state.active_tab().active_pane;
+    let active_tab_id       = state.active_tab().id;
     let active_workspace_id = state.active_workspace;
 
     let keyboard = iced::event::listen()
-        .with((bindings, is_renaming, show_help, active_id, active_workspace_id))
-        .filter_map(|((bindings, is_renaming, show_help, active_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
+        .with((bindings, is_renaming, show_help, active_tab_id, active_workspace_id))
+        .filter_map(|((bindings, is_renaming, show_help, active_tab_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
             if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, text, .. }) = event {
                 use iced::keyboard::key::Named;
 
@@ -784,7 +751,7 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                     return Some(Message::ClosePane);
                 }
                 if matches_binding(&key, modifiers, &bindings.rename_pane) {
-                    return Some(Message::StartRenameTab(active_id));
+                    return Some(Message::StartRenameTab(active_tab_id));
                 }
                 if matches_binding(&key, modifiers, &bindings.tab_next) {
                     return Some(Message::FocusTabNext);

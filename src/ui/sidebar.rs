@@ -115,8 +115,11 @@ impl<Message: Clone + 'static> Sidebar<Message> {
         for ws in &self.workspaces {
             items.push(self.render_workspace(ws));
             if !ws.collapsed {
+                let ws_is_active = ws.id == self.active_workspace_id;
                 for tab in &ws.tabs {
-                    items.push(self.render_tab(tab, ws.id, ws.active_tab_id == tab.id));
+                    // A tab is "active" (full accent) only if its workspace is also active
+                    let is_active = ws_is_active && ws.active_tab_id == tab.id;
+                    items.push(self.render_tab(tab, ws.id, is_active));
                 }
             }
         }
