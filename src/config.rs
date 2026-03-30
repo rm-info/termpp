@@ -44,15 +44,33 @@ pub struct Keybindings {
     pub close_pane: String,
     #[serde(default = "default_rename_pane")]
     pub rename_pane: String,
+    #[serde(default = "default_tab_next")]
+    pub tab_next: String,
+    #[serde(default = "default_tab_prev")]
+    pub tab_prev: String,
+    #[serde(default = "default_tab_new")]
+    pub tab_new: String,
+    #[serde(default = "default_workspace_next")]
+    pub workspace_next: String,
+    #[serde(default = "default_workspace_prev")]
+    pub workspace_prev: String,
+    #[serde(default = "default_workspace_new")]
+    pub workspace_new: String,
 }
 
-fn default_split_h()    -> String { "ctrl+shift+h".to_string() }
-fn default_split_v()    -> String { "ctrl+shift+v".to_string() }
-fn default_pane_next()  -> String { "ctrl+tab".to_string() }
-fn default_pane_prev()  -> String { "ctrl+shift+tab".to_string() }
-fn default_new_pane()   -> String { "ctrl+shift+n".to_string() }
-fn default_close_pane()  -> String { "ctrl+shift+w".to_string() }
-fn default_rename_pane() -> String { "ctrl+shift+r".to_string() }
+fn default_split_h()        -> String { "ctrl+shift+h".to_string() }
+fn default_split_v()        -> String { "ctrl+shift+v".to_string() }
+fn default_pane_next()      -> String { "ctrl+tab".to_string() }
+fn default_pane_prev()      -> String { "ctrl+shift+tab".to_string() }
+fn default_new_pane()       -> String { "ctrl+shift+n".to_string() }
+fn default_close_pane()     -> String { "ctrl+shift+q".to_string() }
+fn default_rename_pane()    -> String { "ctrl+shift+r".to_string() }
+fn default_tab_next()       -> String { "ctrl+pagedown".to_string() }
+fn default_tab_prev()       -> String { "ctrl+pageup".to_string() }
+fn default_tab_new()        -> String { "ctrl+shift+t".to_string() }
+fn default_workspace_next() -> String { "ctrl+shift+pagedown".to_string() }
+fn default_workspace_prev() -> String { "ctrl+shift+pageup".to_string() }
+fn default_workspace_new()  -> String { "ctrl+shift+w".to_string() }
 
 impl Default for Keybindings {
     fn default() -> Self {
@@ -64,6 +82,12 @@ impl Default for Keybindings {
             new_pane:         default_new_pane(),
             close_pane:       default_close_pane(),
             rename_pane:      default_rename_pane(),
+            tab_next:         default_tab_next(),
+            tab_prev:         default_tab_prev(),
+            tab_new:          default_tab_new(),
+            workspace_next:   default_workspace_next(),
+            workspace_prev:   default_workspace_prev(),
+            workspace_new:    default_workspace_new(),
         }
     }
 }
