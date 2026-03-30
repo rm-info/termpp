@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use iced::{Background, Color, Element, Subscription, Task};
-use iced::widget::{column, container, mouse_area, row, text};
+use iced::widget::{column, container, mouse_area, row, text, Space};
 use iced::Length;
 
 use termpp::config::Config;
@@ -61,6 +61,7 @@ pub enum Message {
     ClosePane,
     FocusNext,
     FocusPrev,
+    SelectPane(usize),        // click-to-focus in split layout
     ToggleHelp,
     Resized(f32, f32),
     SidebarDragStart,
@@ -427,6 +428,9 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             if let Some(pos) = ids.iter().position(|&id| id == tab.active_pane) {
                 tab.active_pane = ids[(pos + ids.len() - 1) % ids.len()];
             }
+        }
+        Message::SelectPane(pane_id) => {
+            state.active_tab_mut().active_pane = pane_id;
         }
         Message::ToggleHelp => {
             state.show_help = !state.show_help;
@@ -828,6 +832,119 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     }
 }
 
+fn render_layout(
+    layout:      &termpp::multiplexer::layout::Layout,
+    panes:       &std::collections::HashMap<usize, PaneState>,
+    emulators:   &std::collections::HashMap<usize, std::sync::Arc<std::sync::Mutex<termpp::terminal::emulator::Emulator>>>,
+    active_pane: usize,
+    font_size:   f32,
+    font_name:   &'static str,
+    cursor_on:   bool,
+    close_key:   &str,
+) -> Element<'static, Message> {
+    use termpp::multiplexer::layout::{Layout, SplitDirection};
+
+    match layout {
+        Layout::Leaf(pane_id) => {
+            let pane_id = *pane_id;
+            let is_active = pane_id == active_pane;
+
+            let content: Element<'static, Message> =
+                if let (Some(pane), Some(emu_arc)) = (panes.get(&pane_id), emulators.get(&pane_id)) {
+                    if pane.status == PaneStatus::Dead {
+                        let close_key = close_key.to_string();
+                        container(
+                            column![
+                                text("Process exited")
+                                    .size(18).color(Color { r: 0.75, g: 0.75, b: 0.75, a: 1.0 }),
+                                text(format!("{close_key} to close"))
+                                    .size(13).color(Color { r: 0.40, g: 0.40, b: 0.50, a: 1.0 }),
+                            ]
+                            .spacing(8)
+                            .align_x(iced::Alignment::Center)
+                        )
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .align_x(iced::Alignment::Center)
+                        .align_y(iced::Alignment::Center)
+                        .style(|_| iced::widget::container::Style {
+                            background: Some(Background::Color(AppTheme::PANE_BG)),
+                            ..Default::default()
+                        })
+                        .into()
+                    } else {
+                        let is_waiting = pane.status == PaneStatus::Waiting;
+                        let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        TerminalPane::new(
+                            Arc::clone(&emu.grid),
+                            is_waiting,
+                            font_size,
+                            font_name,
+                            cursor_on,
+                        ).view()
+                    }
+                } else {
+                    iced::widget::text("No pane").into()
+                };
+
+            // Active pane: 1-px accent border; inactive: transparent
+            let border_color = if is_active { AppTheme::ACCENT } else { Color::TRANSPARENT };
+            mouse_area(
+                container(content)
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .style(move |_| iced::widget::container::Style {
+                        border: iced::Border {
+                            color: border_color,
+                            width: if is_active { 1.0 } else { 0.0 },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    })
+            )
+            .on_press(Message::SelectPane(pane_id))
+            .into()
+        }
+        Layout::Split { direction, left, right } => {
+            let left_el  = render_layout(left,  panes, emulators, active_pane, font_size, font_name, cursor_on, close_key);
+            let right_el = render_layout(right, panes, emulators, active_pane, font_size, font_name, cursor_on, close_key);
+            let sep_color = Color { r: 0.18, g: 0.18, b: 0.26, a: 1.0 };
+            match direction {
+                SplitDirection::Vertical => {
+                    // left | right
+                    let sep: Element<'static, Message> = container(Space::new())
+                        .width(1)
+                        .height(Length::Fill)
+                        .style(move |_| iced::widget::container::Style {
+                            background: Some(Background::Color(sep_color)),
+                            ..Default::default()
+                        })
+                        .into();
+                    row![left_el, sep, right_el]
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into()
+                }
+                SplitDirection::Horizontal => {
+                    // top / bottom
+                    let sep: Element<'static, Message> = container(Space::new())
+                        .width(Length::Fill)
+                        .height(1)
+                        .style(move |_| iced::widget::container::Style {
+                            background: Some(Background::Color(sep_color)),
+                            ..Default::default()
+                        })
+                        .into();
+                    column![left_el, sep, right_el]
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into()
+                }
+            }
+        }
+    }
+}
+
 pub fn view(state: &Termpp) -> Element<'_, Message> {
     use termpp::multiplexer::pane::PaneStatus;
 
@@ -905,45 +1022,17 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
     .into();
 
     let tab = state.active_tab();
-    let pane_view: Element<'static, Message> =
-        if let (Some(pane), Some(emu_arc)) = (
-            tab.panes.get(&tab.active_pane),
-            tab.emulators.get(&tab.active_pane),
-        ) {
-            let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
-            if pane.status == PaneStatus::Dead {
-                let close_key = state.config.keybindings.close_pane.clone();
-                container(
-                    column![
-                        text("Process exited").size(18).color(Color { r: 0.75, g: 0.75, b: 0.75, a: 1.0 }),
-                        text(format!("{close_key} to close")).size(13).color(Color { r: 0.40, g: 0.40, b: 0.50, a: 1.0 }),
-                    ]
-                    .spacing(8)
-                    .align_x(iced::Alignment::Center)
-                )
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .align_x(iced::Alignment::Center)
-                .align_y(iced::Alignment::Center)
-                .style(|_| iced::widget::container::Style {
-                    background: Some(Background::Color(AppTheme::PANE_BG)),
-                    ..Default::default()
-                })
-                .into()
-            } else {
-                let is_waiting = pane.status == PaneStatus::Waiting;
-                let cursor_on = (state.blink_tick % 62) < 31;
-                TerminalPane::new(
-                    Arc::clone(&emu.grid),
-                    is_waiting,
-                    state.config.font_size as f32,
-                    state.font_name,
-                    cursor_on,
-                ).view()
-            }
-        } else {
-            iced::widget::text("No pane").into()
-        };
+    let cursor_on = (state.blink_tick % 62) < 31;
+    let pane_view: Element<'static, Message> = render_layout(
+        &tab.layout,
+        &tab.panes,
+        &tab.emulators,
+        tab.active_pane,
+        state.config.font_size as f32,
+        state.font_name,
+        cursor_on,
+        &state.config.keybindings.close_pane,
+    );
 
     let base: Element<'static, Message> = container(row![sidebar, divider, pane_view])
         .width(Length::Fill)
