@@ -14,7 +14,6 @@ pub fn help_overlay<Message: Clone + 'static>(
         ("Scinder vertical",        keybindings.split_vertical.clone()),
         ("Terminal suivant",        keybindings.pane_next.clone()),
         ("Terminal précédent",      keybindings.pane_prev.clone()),
-        ("Nouveau terminal",        keybindings.new_pane.clone()),
         ("Renommer l'onglet",       keybindings.rename_pane.clone()),
         ("Fermer le terminal",      keybindings.close_pane.clone()),
         ("Onglet suivant",          keybindings.tab_next.clone()),

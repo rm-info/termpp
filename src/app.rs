@@ -41,6 +41,8 @@ pub struct Termpp {
     dragging_sidebar:   bool,
     /// Tab currently being renamed: (tab_id, current_input_value).
     renaming_tab:       Option<(usize, String)>,
+    /// Workspace currently being renamed: (ws_id, current_input_value).
+    renaming_workspace: Option<(usize, String)>,
     /// Font name, leaked once at startup for iced's `Family::Name` which needs `&'static str`.
     font_name:          &'static str,
     /// Incremented every fast Tick; drives cursor blink (period = 62 ticks ≈ 1 s).
@@ -64,7 +66,6 @@ pub enum Message {
     SidebarDragStart,
     SidebarDragged(f32),
     SidebarDragEnd,
-    NewPane,
     RenameChanged(String),
     CommitRename,
     CancelRename,
@@ -80,6 +81,11 @@ pub enum Message {
     FocusWorkspacePrev,
     NewWorkspace,
     ToggleWorkspace(usize),   // arg = workspace_id, toggles collapsed
+    // Workspace rename
+    StartRenameWorkspace(usize),
+    RenameWorkspaceChanged(String),
+    CommitRenameWorkspace,
+    CancelRenameWorkspace,
 }
 
 impl Termpp {
@@ -167,7 +173,8 @@ pub fn boot() -> (Termpp, Task<Message>) {
         window_size:       (WINDOW_W, WINDOW_H),
         sidebar_w:         SIDEBAR_INIT_W,
         dragging_sidebar:  false,
-        renaming_tab:      None,
+        renaming_tab:       None,
+        renaming_workspace: None,
         font_name,
         blink_tick:        0,
     };
@@ -175,8 +182,20 @@ pub fn boot() -> (Termpp, Task<Message>) {
     (app, Task::none())
 }
 
-pub fn title(_state: &Termpp) -> String {
-    "terminal++".to_string()
+pub fn title(state: &Termpp) -> String {
+    let ws_name = state.workspaces.iter()
+        .find(|w| w.id == state.active_workspace)
+        .map(|w| w.name.as_str())
+        .unwrap_or("default");
+    let tab = state.active_tab();
+    let term_title = tab.panes.get(&tab.active_pane)
+        .and_then(|p| p.terminal_title.as_deref())
+        .unwrap_or("");
+    if term_title.is_empty() {
+        format!("terminal++ — {ws_name} — {}", tab.name)
+    } else {
+        format!("terminal++ — {ws_name} — {} — {term_title}", tab.name)
+    }
 }
 
 pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
@@ -413,24 +432,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             state.show_help = !state.show_help;
             if state.show_help {
                 state.renaming_tab = None;
-            }
-        }
-        Message::NewPane => {
-            let (emu_cols, emu_rows) = state.emu_size();
-            let shell = state.config.shell.clone();
-            let tab = state.active_tab_mut();
-            let new_id = tab.next_pane_id;
-            if let Some(new_layout) = tab.layout.split(tab.active_pane, SplitDirection::Vertical, new_id) {
-                tab.layout = new_layout;
-                let cwd = tab.panes.get(&tab.active_pane).map(|p| p.cwd.clone()).unwrap_or_default();
-                tab.panes.insert(new_id, PaneState::new(new_id, cwd.clone()));
-                tab.next_pane_id += 1;
-                let tab = state.active_tab_mut();
-                if let Ok(emu) = Emulator::start(emu_cols, emu_rows, &shell, &cwd) {
-                    tab.last_output_counts.insert(new_id, 0);
-                    tab.emulators.insert(new_id, Arc::new(Mutex::new(emu)));
-                }
-                tab.active_pane = new_id;
+                state.renaming_workspace = None;
             }
         }
         Message::StartRenameTab(tab_id) => {
@@ -465,6 +467,29 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::CancelRename => {
             state.renaming_tab = None;
+        }
+        Message::StartRenameWorkspace(ws_id) => {
+            let name = state.workspaces.iter().find(|w| w.id == ws_id)
+                .map(|w| w.name.clone()).unwrap_or_default();
+            state.renaming_workspace = Some((ws_id, name));
+            return iced::widget::operation::focus(
+                iced::widget::Id::new(termpp::ui::sidebar::RENAME_WS_INPUT_ID)
+            );
+        }
+        Message::RenameWorkspaceChanged(s) => {
+            if let Some((_, ref mut val)) = state.renaming_workspace {
+                *val = s;
+            }
+        }
+        Message::CommitRenameWorkspace => {
+            if let Some((ws_id, name)) = state.renaming_workspace.take() {
+                if let Some(ws) = state.workspaces.iter_mut().find(|w| w.id == ws_id) {
+                    ws.name = if name.trim().is_empty() { "workspace".into() } else { name.trim().to_string() };
+                }
+            }
+        }
+        Message::CancelRenameWorkspace => {
+            state.renaming_workspace = None;
         }
         Message::FocusTabNext => {
             let wi = state.active_ws_idx();
@@ -698,15 +723,16 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     // Use Subscription::with() to attach keybindings as cloned data into the stream,
     // then filter_map with a plain `fn` pointer (zero-sized, no captures) that
     // receives (bindings, event) and produces the correct Message.
-    let bindings    = state.config.keybindings.clone();
-    let is_renaming         = state.renaming_tab.is_some();
-    let show_help   = state.show_help;
+    let bindings        = state.config.keybindings.clone();
+    let is_renaming_tab = state.renaming_tab.is_some();
+    let is_renaming_ws  = state.renaming_workspace.is_some();
+    let show_help       = state.show_help;
     let active_tab_id       = state.active_tab().id;
     let active_workspace_id = state.active_workspace;
 
     let keyboard = iced::event::listen()
-        .with((bindings, is_renaming, show_help, active_tab_id, active_workspace_id))
-        .filter_map(|((bindings, is_renaming, show_help, active_tab_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
+        .with((bindings, is_renaming_tab, is_renaming_ws, show_help, active_tab_id, active_workspace_id))
+        .filter_map(|((bindings, is_renaming_tab, is_renaming_ws, show_help, active_tab_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
             if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, text, .. }) = event {
                 use iced::keyboard::key::Named;
 
@@ -716,9 +742,13 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                 }
 
                 // 2. During rename: only Escape passes through
-                if is_renaming {
+                if is_renaming_tab || is_renaming_ws {
                     if matches!(key, iced::keyboard::Key::Named(Named::Escape)) {
-                        return Some(Message::CancelRename);
+                        return if is_renaming_ws {
+                            Some(Message::CancelRenameWorkspace)
+                        } else {
+                            Some(Message::CancelRename)
+                        };
                     }
                     return None;
                 }
@@ -743,9 +773,6 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                 }
                 if matches_binding(&key, modifiers, &bindings.pane_prev) {
                     return Some(Message::FocusPrev);
-                }
-                if matches_binding(&key, modifiers, &bindings.new_pane) {
-                    return Some(Message::NewPane);
                 }
                 if matches_binding(&key, modifiers, &bindings.close_pane) {
                     return Some(Message::ClosePane);
@@ -828,6 +855,7 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
             &ws_entries,
             state.active_workspace,
             state.renaming_tab.clone(),
+            state.renaming_workspace.clone(),
             Message::SelectTab,
             Message::CloseTab,
             Message::NewTabIn,
@@ -837,6 +865,10 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
             Message::RenameChanged,
             Message::CommitRename,
             Message::CancelRename,
+            Message::StartRenameWorkspace,
+            Message::RenameWorkspaceChanged,
+            Message::CommitRenameWorkspace,
+            Message::CancelRenameWorkspace,
             Message::ToggleHelp,
         ).view())
         .width(state.sidebar_w)

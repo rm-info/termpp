@@ -3,7 +3,8 @@ use iced::{Background, Element, Length};
 
 use crate::ui::theme::Theme as AppTheme;
 
-pub const RENAME_INPUT_ID: &str = "sidebar_rename";
+pub const RENAME_INPUT_ID:    &str = "sidebar_rename";
+pub const RENAME_WS_INPUT_ID: &str = "sidebar_rename_ws";
 
 pub struct TabEntry {
     pub id: usize,
@@ -22,36 +23,46 @@ pub struct WorkspaceEntry {
 }
 
 pub struct Sidebar<Message: Clone + 'static> {
-    workspaces:          Vec<WorkspaceEntry>,
-    active_workspace_id: usize,
-    renaming:            Option<(usize, String)>, // (tab_id, current_name)
-    on_select_tab:       fn(usize) -> Message,
-    on_close_tab:        fn(usize) -> Message,
-    on_new_tab:          fn(usize) -> Message,    // arg = workspace_id
-    on_toggle_workspace: fn(usize) -> Message,
-    on_new_workspace:    Message,
-    on_rename_start:     fn(usize) -> Message,    // arg = tab_id
-    on_rename_change:    fn(String) -> Message,
-    on_rename_commit:    Message,
-    on_rename_cancel:    Message,
-    on_help:             Message,
+    workspaces:                  Vec<WorkspaceEntry>,
+    active_workspace_id:         usize,
+    renaming:                    Option<(usize, String)>, // (tab_id, current_name)
+    renaming_workspace:          Option<(usize, String)>, // (ws_id, current_name)
+    on_select_tab:               fn(usize) -> Message,
+    on_close_tab:                fn(usize) -> Message,
+    on_new_tab:                  fn(usize) -> Message,    // arg = workspace_id
+    on_toggle_workspace:         fn(usize) -> Message,
+    on_new_workspace:            Message,
+    on_rename_start:             fn(usize) -> Message,    // tab rename (double-click / Ctrl+Shift+R)
+    on_rename_change:            fn(String) -> Message,
+    on_rename_commit:            Message,
+    on_rename_cancel:            Message,
+    on_rename_workspace_start:   fn(usize) -> Message,    // workspace rename (double-click)
+    on_rename_workspace_change:  fn(String) -> Message,
+    on_rename_workspace_commit:  Message,
+    on_rename_workspace_cancel:  Message,
+    on_help:                     Message,
 }
 
 impl<Message: Clone + 'static> Sidebar<Message> {
     pub fn new(
-        workspaces:          &[WorkspaceEntry],
-        active_workspace_id: usize,
-        renaming:            Option<(usize, String)>,
-        on_select_tab:       fn(usize) -> Message,
-        on_close_tab:        fn(usize) -> Message,
-        on_new_tab:          fn(usize) -> Message,
-        on_toggle_workspace: fn(usize) -> Message,
-        on_new_workspace:    Message,
-        on_rename_start:     fn(usize) -> Message,
-        on_rename_change:    fn(String) -> Message,
-        on_rename_commit:    Message,
-        on_rename_cancel:    Message,
-        on_help:             Message,
+        workspaces:                  &[WorkspaceEntry],
+        active_workspace_id:         usize,
+        renaming:                    Option<(usize, String)>,
+        renaming_workspace:          Option<(usize, String)>,
+        on_select_tab:               fn(usize) -> Message,
+        on_close_tab:                fn(usize) -> Message,
+        on_new_tab:                  fn(usize) -> Message,
+        on_toggle_workspace:         fn(usize) -> Message,
+        on_new_workspace:            Message,
+        on_rename_start:             fn(usize) -> Message,
+        on_rename_change:            fn(String) -> Message,
+        on_rename_commit:            Message,
+        on_rename_cancel:            Message,
+        on_rename_workspace_start:   fn(usize) -> Message,
+        on_rename_workspace_change:  fn(String) -> Message,
+        on_rename_workspace_commit:  Message,
+        on_rename_workspace_cancel:  Message,
+        on_help:                     Message,
     ) -> Self {
         let owned = workspaces.iter().map(|ws| WorkspaceEntry {
             id: ws.id,
@@ -70,6 +81,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             workspaces: owned,
             active_workspace_id,
             renaming,
+            renaming_workspace,
             on_select_tab,
             on_close_tab,
             on_new_tab,
@@ -79,6 +91,10 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             on_rename_change,
             on_rename_commit,
             on_rename_cancel,
+            on_rename_workspace_start,
+            on_rename_workspace_change,
+            on_rename_workspace_commit,
+            on_rename_workspace_cancel,
             on_help,
         }
     }
@@ -139,9 +155,46 @@ impl<Message: Clone + 'static> Sidebar<Message> {
     }
 
     fn render_workspace(&self, ws: &WorkspaceEntry) -> Element<'static, Message> {
+        let is_renaming_this = self.renaming_workspace.as_ref().map(|(id, _)| *id) == Some(ws.id);
+
+        if is_renaming_this {
+            let value      = self.renaming_workspace.as_ref().map(|(_, s)| s.clone()).unwrap_or_default();
+            let change_fn  = self.on_rename_workspace_change;
+            let commit_msg = self.on_rename_workspace_commit.clone();
+            let cancel_msg = self.on_rename_workspace_cancel.clone();
+
+            let input: Element<'static, Message> = text_input("Nom…", &value)
+                .id(iced::widget::Id::new(RENAME_WS_INPUT_ID))
+                .on_input(move |s| change_fn(s))
+                .on_submit(commit_msg)
+                .size(12)
+                .padding([2, 4])
+                .into();
+
+            let cancel: Element<'static, Message> = mouse_area(
+                text("×").color(AppTheme::TEXT_DIM).size(13)
+            )
+            .on_press(cancel_msg)
+            .into();
+
+            return container(
+                row![Space::new().width(3), input, cancel]
+                    .spacing(4)
+                    .align_y(iced::Alignment::Center)
+            )
+            .width(Length::Fill)
+            .padding([5, 8])
+            .style(|_| iced::widget::container::Style {
+                background: Some(Background::Color(AppTheme::PANE_BG)),
+                ..Default::default()
+            })
+            .into();
+        }
+
         let is_active   = ws.id == self.active_workspace_id;
         let arrow       = if ws.collapsed { "▸" } else { "▾" };
         let toggle_msg  = (self.on_toggle_workspace)(ws.id);
+        let rename_msg  = (self.on_rename_workspace_start)(ws.id);
         let new_tab_msg = (self.on_new_tab)(ws.id);
 
         let (accent_color, text_color, bg_color) = if is_active {
@@ -180,6 +233,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             row![accent, content].width(Length::Fill).height(Length::Shrink)
         )
         .on_press(toggle_msg)
+        .on_double_click(rename_msg)
         .into()
     }
 
@@ -231,7 +285,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
 
         let select_msg = (self.on_select_tab)(tab.id);
         let close_msg  = (self.on_close_tab)(tab.id);
-        let rename_msg = (self.on_rename_start)(tab.id);
+        let rename_dbl = (self.on_rename_start)(tab.id);
 
         let (accent_color, name_color, bg_color) = if is_active {
             (AppTheme::ACCENT, AppTheme::TEXT_PRIMARY, AppTheme::PANE_BG)
@@ -255,11 +309,6 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             Space::new().width(4).into()
         };
 
-        let rename_btn: Element<'static, Message> =
-            mouse_area(text("✎").color(AppTheme::TEXT_DIM).size(11))
-                .on_press(rename_msg)
-                .into();
-
         let close_btn: Element<'static, Message> =
             mouse_area(text("×").color(AppTheme::TEXT_DIM).size(13))
                 .on_press(close_msg)
@@ -269,7 +318,6 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             text(tab.name.clone()).color(name_color).size(13),
             Space::new().width(Length::Fill),
             badge,
-            rename_btn,
             close_btn,
         ]
         .spacing(3)
@@ -301,6 +349,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
             row![indent, accent_bar, content].width(Length::Fill).height(Length::Shrink)
         )
         .on_press(select_msg)
+        .on_double_click(rename_dbl)
         .into()
     }
 }

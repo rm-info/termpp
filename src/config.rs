@@ -38,8 +38,6 @@ pub struct Keybindings {
     pub pane_next: String,
     #[serde(default = "default_pane_prev")]
     pub pane_prev: String,
-    #[serde(default = "default_new_pane")]
-    pub new_pane: String,
     #[serde(default = "default_close_pane")]
     pub close_pane: String,
     #[serde(default = "default_rename_pane")]
@@ -62,7 +60,6 @@ fn default_split_h()        -> String { "ctrl+shift+h".to_string() }
 fn default_split_v()        -> String { "ctrl+shift+v".to_string() }
 fn default_pane_next()      -> String { "ctrl+tab".to_string() }
 fn default_pane_prev()      -> String { "ctrl+shift+tab".to_string() }
-fn default_new_pane()       -> String { "ctrl+shift+n".to_string() }
 fn default_close_pane()     -> String { "ctrl+shift+q".to_string() }
 fn default_rename_pane()    -> String { "ctrl+shift+r".to_string() }
 fn default_tab_next()       -> String { "ctrl+pagedown".to_string() }
@@ -79,7 +76,6 @@ impl Default for Keybindings {
             split_vertical:   default_split_v(),
             pane_next:        default_pane_next(),
             pane_prev:        default_pane_prev(),
-            new_pane:         default_new_pane(),
             close_pane:       default_close_pane(),
             rename_pane:      default_rename_pane(),
             tab_next:         default_tab_next(),

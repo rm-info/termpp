@@ -19,7 +19,6 @@ fn help_overlay_uses_keybinding_strings() {
         split_vertical:   "ctrl+shift+test_v".to_string(),
         pane_next:        "ctrl+shift+test_n".to_string(),
         pane_prev:        "ctrl+shift+test_p".to_string(),
-        new_pane:         "ctrl+shift+test_np".to_string(),
         close_pane:       "ctrl+shift+test_w".to_string(),
         rename_pane:      "ctrl+shift+test_r".to_string(),
         tab_next:         "ctrl+shift+test_tn".to_string(),
