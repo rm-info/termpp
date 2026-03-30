@@ -10,14 +10,20 @@ pub fn help_overlay<Message: Clone + 'static>(
 ) -> Element<'static, Message> {
     // Clone all strings immediately — no borrows from keybindings may escape
     let shortcuts: Vec<(&'static str, String)> = vec![
-        ("Scinder horizontal",  keybindings.split_horizontal.clone()),
-        ("Scinder vertical",    keybindings.split_vertical.clone()),
-        ("Pane suivant",        keybindings.pane_next.clone()),
-        ("Pane précédent",      keybindings.pane_prev.clone()),
-        ("Nouveau pane",        keybindings.new_pane.clone()),
-        ("Renommer le pane",    keybindings.rename_pane.clone()),
-        ("Fermer le pane",      keybindings.close_pane.clone()),
-        ("Aide",                "F1".to_string()),
+        ("Scinder horizontal",      keybindings.split_horizontal.clone()),
+        ("Scinder vertical",        keybindings.split_vertical.clone()),
+        ("Terminal suivant",        keybindings.pane_next.clone()),
+        ("Terminal précédent",      keybindings.pane_prev.clone()),
+        ("Nouveau terminal",        keybindings.new_pane.clone()),
+        ("Renommer l'onglet",       keybindings.rename_pane.clone()),
+        ("Fermer le terminal",      keybindings.close_pane.clone()),
+        ("Onglet suivant",          keybindings.tab_next.clone()),
+        ("Onglet précédent",        keybindings.tab_prev.clone()),
+        ("Nouvel onglet",           keybindings.tab_new.clone()),
+        ("Workspace suivant",       keybindings.workspace_next.clone()),
+        ("Workspace précédent",     keybindings.workspace_prev.clone()),
+        ("Nouveau workspace",       keybindings.workspace_new.clone()),
+        ("Aide",                    "F1".to_string()),
     ];
 
     let close_msg = on_close.clone();
