@@ -22,6 +22,12 @@ fn help_overlay_uses_keybinding_strings() {
         new_pane:         "ctrl+shift+test_np".to_string(),
         close_pane:       "ctrl+shift+test_w".to_string(),
         rename_pane:      "ctrl+shift+test_r".to_string(),
+        tab_next:         "ctrl+shift+test_tn".to_string(),
+        tab_prev:         "ctrl+shift+test_tp".to_string(),
+        tab_new:          "ctrl+shift+test_tt".to_string(),
+        workspace_next:   "ctrl+shift+test_wn".to_string(),
+        workspace_prev:   "ctrl+shift+test_wp".to_string(),
+        workspace_new:    "ctrl+shift+test_ww".to_string(),
     };
     let _el: iced::Element<'static, ()> = help_overlay(&kb, ());
     drop(kb); // kb is dropped before _el — would fail if _el borrowed from kb
