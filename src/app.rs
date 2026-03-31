@@ -27,8 +27,8 @@ const DIVIDER_W: f32      = 4.0;
 const CHAR_W_RATIO: f32   = 0.6;
 /// Line height ratio: height ≈ font_size × 1.4
 const LINE_H_RATIO: f32   = 1.2;
-/// Height of the per-pane focus indicator bar (pixels).
-const FOCUS_BAR_H: f32    = 2.0;
+/// Width of the per-pane focus indicator bar on the left edge (pixels).
+const ACCENT_BAR_W: f32   = 3.0;
 
 pub struct Termpp {
     config:             Config,
@@ -115,9 +115,9 @@ impl Termpp {
 
     fn emu_size(&self) -> (u16, u16) {
         let (ww, wh) = self.window_size;
-        let cols = ((ww - self.sidebar_w - DIVIDER_W - TERM_PADDING * 2.0)
+        let cols = ((ww - self.sidebar_w - DIVIDER_W - ACCENT_BAR_W - TERM_PADDING * 2.0)
             / (self.config.font_size as f32 * CHAR_W_RATIO)).floor() as u16;
-        let rows = ((wh - TERM_PADDING * 2.0 - FOCUS_BAR_H)
+        let rows = ((wh - TERM_PADDING * 2.0)
             / (self.config.font_size as f32 * LINE_H_RATIO)).floor() as u16;
         (cols, rows)
     }
@@ -129,8 +129,8 @@ impl Termpp {
 
     /// Converts pixel dimensions (per-pane) to (cols, rows) for an emulator.
     fn px_to_emu(w_px: f32, h_px: f32, font_size: f32) -> (u16, u16) {
-        let cols = ((w_px - TERM_PADDING * 2.0) / (font_size * CHAR_W_RATIO)).floor() as u16;
-        let rows = ((h_px - TERM_PADDING * 2.0 - FOCUS_BAR_H) / (font_size * LINE_H_RATIO)).floor() as u16;
+        let cols = ((w_px - ACCENT_BAR_W - TERM_PADDING * 2.0) / (font_size * CHAR_W_RATIO)).floor() as u16;
+        let rows = ((h_px - TERM_PADDING * 2.0) / (font_size * LINE_H_RATIO)).floor() as u16;
         (cols.max(1), rows.max(1))
     }
 }
@@ -859,10 +859,10 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
 
                 // 4. Normal dispatch
                 if matches_binding(&key, modifiers, &bindings.split_horizontal) {
-                    return Some(Message::SplitPane(SplitDirection::Horizontal));
+                    return Some(Message::SplitPane(SplitDirection::Vertical));
                 }
                 if matches_binding(&key, modifiers, &bindings.split_vertical) {
-                    return Some(Message::SplitPane(SplitDirection::Vertical));
+                    return Some(Message::SplitPane(SplitDirection::Horizontal));
                 }
                 if matches_binding(&key, modifiers, &bindings.pane_next) {
                     return Some(Message::FocusNext);
@@ -981,11 +981,9 @@ fn render_layout(
                         })
                         .into()
                     } else {
-                        let is_waiting = pane.status == PaneStatus::Waiting;
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                         TerminalPane::new(
                             Arc::clone(&emu.grid),
-                            is_waiting,
                             font_size,
                             font_name,
                             cursor_on,
@@ -995,15 +993,11 @@ fn render_layout(
                     iced::widget::text("No pane").into()
                 };
 
-            // 2-px focus indicator bar: active = ACCENT, inactive = subtle dim line
-            let bar_color = if is_active {
-                AppTheme::ACCENT
-            } else {
-                Color { r: 0.12, g: 0.12, b: 0.18, a: 1.0 }
-            };
-            let top_bar: Element<'static, Message> = container(Space::new())
-                .width(Length::Fill)
-                .height(FOCUS_BAR_H)
+            // 3-px left-edge accent bar: bright when active, invisible when not
+            let bar_color = if is_active { AppTheme::ACCENT } else { AppTheme::PANE_BG };
+            let accent_bar: Element<'static, Message> = container(Space::new())
+                .width(ACCENT_BAR_W)
+                .height(Length::Fill)
                 .style(move |_| iced::widget::container::Style {
                     background: Some(Background::Color(bar_color)),
                     ..Default::default()
@@ -1012,7 +1006,7 @@ fn render_layout(
 
             mouse_area(
                 container(
-                    column![top_bar, content].width(Length::Fill).height(Length::Fill)
+                    iced::widget::row![accent_bar, content].width(Length::Fill).height(Length::Fill)
                 )
                 .width(w_px)
                 .height(h_px)
@@ -1020,8 +1014,8 @@ fn render_layout(
             .on_press(Message::SelectPane(pane_id))
             .into()
         }
-        Layout::Split { direction, left, right, ratio } => {
-            let divider_id  = left.first_pane();
+        Layout::Split { split_id, direction, left, right, ratio } => {
+            let divider_id  = *split_id;
             let sep_color   = Color { r: 0.18, g: 0.18, b: 0.26, a: 1.0 };
             match direction {
                 SplitDirection::Vertical => {
@@ -1044,8 +1038,8 @@ fn render_layout(
                     .interaction(iced::mouse::Interaction::ResizingHorizontally)
                     .into();
                     row![left_el, sep, right_el]
-                        .width(Length::Fill)
-                        .height(Length::Fill)
+                        .width(w_px)
+                        .height(h_px)
                         .into()
                 }
                 SplitDirection::Horizontal => {
@@ -1056,7 +1050,7 @@ fn render_layout(
                     let bot_el = render_layout(right, panes, emulators, active_pane, w_px, bh, font_size, font_name, cursor_on, close_key);
                     let sep: Element<'static, Message> = mouse_area(
                         container(Space::new())
-                            .width(Length::Fill)
+                            .width(w_px)
                             .height(SEP_PX)
                             .style(move |_| iced::widget::container::Style {
                                 background: Some(Background::Color(sep_color)),
@@ -1068,8 +1062,8 @@ fn render_layout(
                     .interaction(iced::mouse::Interaction::ResizingVertically)
                     .into();
                     column![top_el, sep, bot_el]
-                        .width(Length::Fill)
-                        .height(Length::Fill)
+                        .width(w_px)
+                        .height(h_px)
                         .into()
                 }
             }

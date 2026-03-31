@@ -12,6 +12,8 @@ pub enum SplitDirection {
 pub enum Layout {
     Leaf(PaneId),
     Split {
+        /// Unique identity for this split node (equals the right child's pane id at creation).
+        split_id:  PaneId,
         direction: SplitDirection,
         left:  Box<Layout>,
         right: Box<Layout>,
@@ -30,7 +32,7 @@ impl Layout {
 
     pub fn depth(&self) -> usize {
         match self {
-            Layout::Leaf(_)                    => 0,
+            Layout::Leaf(_) => 0,
             Layout::Split { left, right, .. } =>
                 1 + left.depth().max(right.depth()),
         }
@@ -55,12 +57,12 @@ impl Layout {
         }
     }
 
-    /// Returns the ratio of the split whose left child's first pane == divider_id.
+    /// Returns the ratio of the split with the given split_id.
     pub fn get_ratio(&self, divider_id: PaneId) -> Option<f32> {
         match self {
             Layout::Leaf(_) => None,
-            Layout::Split { left, right, ratio, .. } => {
-                if left.first_pane() == divider_id {
+            Layout::Split { split_id, left, right, ratio, .. } => {
+                if *split_id == divider_id {
                     Some(*ratio)
                 } else {
                     left.get_ratio(divider_id)
@@ -70,12 +72,12 @@ impl Layout {
         }
     }
 
-    /// Updates the ratio of the split identified by its left child's first pane.
+    /// Updates the ratio of the split with the given split_id.
     pub fn set_ratio(&mut self, divider_id: PaneId, new_ratio: f32) {
         match self {
             Layout::Leaf(_) => {}
-            Layout::Split { left, right, ratio, .. } => {
-                if left.first_pane() == divider_id {
+            Layout::Split { split_id, left, right, ratio, .. } => {
+                if *split_id == divider_id {
                     *ratio = new_ratio.clamp(0.1, 0.9);
                 } else {
                     left.set_ratio(divider_id, new_ratio);
@@ -94,7 +96,7 @@ impl Layout {
                 m.insert(*id, (w, h));
                 m
             }
-            Layout::Split { direction, left, right, ratio } => {
+            Layout::Split { direction, left, right, ratio, .. } => {
                 let content = match direction {
                     SplitDirection::Vertical   => w - Self::SEP_PX,
                     SplitDirection::Horizontal => h - Self::SEP_PX,
@@ -128,15 +130,17 @@ impl Layout {
     fn split_inner(&self, target: PaneId, dir: SplitDirection, new_id: PaneId) -> Option<Self> {
         match self {
             Layout::Leaf(id) if *id == target => Some(Layout::Split {
+                split_id:  new_id,
                 direction: dir,
                 left:  Box::new(Layout::Leaf(target)),
                 right: Box::new(Layout::Leaf(new_id)),
                 ratio: 0.5,
             }),
             Layout::Leaf(_) => None,
-            Layout::Split { direction, left, right, ratio } => {
+            Layout::Split { split_id, direction, left, right, ratio } => {
                 if let Some(nl) = left.split_inner(target, dir.clone(), new_id) {
                     return Some(Layout::Split {
+                        split_id:  *split_id,
                         direction: direction.clone(),
                         left:  Box::new(nl),
                         right: right.clone(),
@@ -144,6 +148,7 @@ impl Layout {
                     });
                 }
                 right.split_inner(target, dir, new_id).map(|nr| Layout::Split {
+                    split_id:  *split_id,
                     direction: direction.clone(),
                     left:  left.clone(),
                     right: Box::new(nr),
@@ -157,7 +162,7 @@ impl Layout {
         match self {
             Layout::Leaf(id) if *id == target => None,
             Layout::Leaf(_) => Some(self.clone()),
-            Layout::Split { direction, left, right, ratio } => {
+            Layout::Split { split_id, direction, left, right, ratio } => {
                 match (left.as_ref(), right.as_ref()) {
                     (Layout::Leaf(l), _) if *l == target => Some(*right.clone()),
                     (_, Layout::Leaf(r)) if *r == target => Some(*left.clone()),
@@ -165,6 +170,7 @@ impl Layout {
                         let nl = left.remove(target).unwrap_or_else(|| *left.clone());
                         let nr = right.remove(target).unwrap_or_else(|| *right.clone());
                         Some(Layout::Split {
+                            split_id:  *split_id,
                             direction: direction.clone(),
                             left:  Box::new(nl),
                             right: Box::new(nr),
