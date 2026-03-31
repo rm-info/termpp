@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthChar;
 
+const SCROLLBACK_MAX: usize = 10_000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Color(pub u8, pub u8, pub u8);
 
@@ -73,6 +75,8 @@ pub struct GridPerformer {
     current_fg: Color,
     current_bg: Color,
     event_tx: mpsc::Sender<TermEvent>,
+    scrollback:    VecDeque<Vec<Cell>>,
+    scroll_offset: usize,
 }
 
 impl GridPerformer {
@@ -86,6 +90,8 @@ impl GridPerformer {
             current_fg: DEFAULT_FG.clone(),
             current_bg: DEFAULT_BG.clone(),
             event_tx,
+            scrollback:    VecDeque::new(),
+            scroll_offset: 0,
         }
     }
 
@@ -95,6 +101,37 @@ impl GridPerformer {
 
     pub fn cols(&self) -> usize { self.cols }
     pub fn rows(&self) -> usize { self.rows }
+
+    /// Returns the row to display for `visual_row` (0 = top of visible area),
+    /// accounting for the current scroll_offset.
+    pub fn visible_row(&self, visual_row: usize) -> &[Cell] {
+        if self.scroll_offset == 0 {
+            return &self.cells[visual_row.min(self.rows - 1)];
+        }
+        let abs_start = self.scrollback.len().saturating_sub(self.scroll_offset);
+        let abs_idx   = abs_start + visual_row;
+        if abs_idx < self.scrollback.len() {
+            &self.scrollback[abs_idx]
+        } else {
+            let cell_idx = (abs_idx - self.scrollback.len()).min(self.rows - 1);
+            &self.cells[cell_idx]
+        }
+    }
+
+    /// Scroll back N lines into history (increases offset).
+    pub fn scroll_up_by(&mut self, lines: usize) {
+        self.scroll_offset = (self.scroll_offset + lines).min(self.scrollback.len());
+    }
+
+    /// Scroll forward N lines toward live view (decreases offset).
+    pub fn scroll_down_by(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    pub fn scroll_offset(&self) -> usize { self.scroll_offset }
+    pub fn scrollback_len(&self) -> usize { self.scrollback.len() }
+
+    fn reset_scroll(&mut self) { self.scroll_offset = 0; }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
         // Resize active screen
@@ -134,7 +171,12 @@ impl GridPerformer {
     }
 
     fn scroll_up(&mut self) {
-        self.cells.pop_front();
+        if let Some(displaced) = self.cells.pop_front() {
+            if self.scrollback.len() >= SCROLLBACK_MAX {
+                self.scrollback.pop_front();
+            }
+            self.scrollback.push_back(displaced);
+        }
         self.cells.push_back(vec![Cell::blank(); self.cols]);
     }
 
@@ -238,6 +280,7 @@ impl vte::Perform for GridPerformer {
                     self.alt_backup = Some((primary, self.cursor_col, self.cursor_row));
                     self.cursor_col = 0;
                     self.cursor_row = 0;
+                    self.reset_scroll();
                     self.current_fg = DEFAULT_FG.clone();
                     self.current_bg = DEFAULT_BG.clone();
                 }
@@ -248,6 +291,7 @@ impl vte::Perform for GridPerformer {
                         self.cursor_col = col;
                         self.cursor_row = row;
                     }
+                    self.reset_scroll();
                 }
                 _ => {} // cursor show/hide and other private modes ignored for now
             }
