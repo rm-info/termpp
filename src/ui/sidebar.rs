@@ -145,7 +145,7 @@ impl<Message: Clone + 'static> Sidebar<Message> {
                 .spacing(0)
                 .push(Space::new().height(Length::Fill))
         )
-        .width(200)
+        .width(Length::Fill)
         .height(Length::Fill)
         .style(|_| iced::widget::container::Style {
             background: Some(Background::Color(AppTheme::SIDEBAR_BG)),

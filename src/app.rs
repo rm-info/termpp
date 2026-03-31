@@ -27,6 +27,8 @@ const DIVIDER_W: f32      = 4.0;
 const CHAR_W_RATIO: f32   = 0.6;
 /// Line height ratio: height ≈ font_size × 1.4
 const LINE_H_RATIO: f32   = 1.2;
+/// Height of the per-pane focus indicator bar (pixels).
+const FOCUS_BAR_H: f32    = 2.0;
 
 pub struct Termpp {
     config:             Config,
@@ -47,6 +49,8 @@ pub struct Termpp {
     font_name:          &'static str,
     /// Incremented every fast Tick; drives cursor blink (period = 62 ticks ≈ 1 s).
     blink_tick:         u8,
+    /// Split divider being dragged: (divider_id, is_vertical, Option<(start_mouse, start_ratio)>).
+    dragging_split:     Option<(usize, bool, Option<(f32, f32)>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +66,9 @@ pub enum Message {
     FocusNext,
     FocusPrev,
     SelectPane(usize),        // click-to-focus in split layout
+    SplitDividerDragStart(usize, bool),  // (divider_id, is_vertical)
+    SplitDividerDragged(f32, f32),       // (mouse_x, mouse_y)
+    SplitDividerDragEnd,
     ToggleHelp,
     Resized(f32, f32),
     SidebarDragStart,
@@ -110,9 +117,21 @@ impl Termpp {
         let (ww, wh) = self.window_size;
         let cols = ((ww - self.sidebar_w - DIVIDER_W - TERM_PADDING * 2.0)
             / (self.config.font_size as f32 * CHAR_W_RATIO)).floor() as u16;
-        let rows = ((wh - TERM_PADDING * 2.0)
+        let rows = ((wh - TERM_PADDING * 2.0 - FOCUS_BAR_H)
             / (self.config.font_size as f32 * LINE_H_RATIO)).floor() as u16;
         (cols, rows)
+    }
+
+    /// Returns the available pane area in pixels (width, height).
+    fn pane_area_px(&self) -> (f32, f32) {
+        (self.window_size.0 - self.sidebar_w - DIVIDER_W, self.window_size.1)
+    }
+
+    /// Converts pixel dimensions (per-pane) to (cols, rows) for an emulator.
+    fn px_to_emu(w_px: f32, h_px: f32, font_size: f32) -> (u16, u16) {
+        let cols = ((w_px - TERM_PADDING * 2.0) / (font_size * CHAR_W_RATIO)).floor() as u16;
+        let rows = ((h_px - TERM_PADDING * 2.0 - FOCUS_BAR_H) / (font_size * LINE_H_RATIO)).floor() as u16;
+        (cols.max(1), rows.max(1))
     }
 }
 
@@ -178,6 +197,7 @@ pub fn boot() -> (Termpp, Task<Message>) {
         renaming_workspace: None,
         font_name,
         blink_tick:        0,
+        dragging_split:    None,
     };
 
     (app, Task::none())
@@ -339,12 +359,17 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::Resized(w, h) => {
             state.window_size = (w, h);
-            let (new_cols, new_rows) = state.emu_size();
+            let font_size = state.config.font_size as f32;
+            let (pw, ph)  = state.pane_area_px();
             for ws in &state.workspaces {
                 for tab in &ws.tabs {
-                    for emu_arc in tab.emulators.values() {
+                    let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
+                    for (&pid, emu_arc) in &tab.emulators {
+                        let (cols, rows) = px_sizes.get(&pid)
+                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                            .unwrap_or((80, 24));
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
-                        emu.resize(new_cols, new_rows);
+                        emu.resize(cols, rows);
                     }
                 }
             }
@@ -357,35 +382,55 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::SidebarDragEnd => {
             state.dragging_sidebar = false;
-            let (new_cols, new_rows) = state.emu_size();
+            let font_size = state.config.font_size as f32;
+            let (pw, ph)  = state.pane_area_px();
             for ws in &state.workspaces {
                 for tab in &ws.tabs {
-                    for emu_arc in tab.emulators.values() {
+                    let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
+                    for (&pid, emu_arc) in &tab.emulators {
+                        let (cols, rows) = px_sizes.get(&pid)
+                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                            .unwrap_or((80, 24));
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
-                        emu.resize(new_cols, new_rows);
+                        emu.resize(cols, rows);
                     }
                 }
             }
         }
         Message::SplitPane(dir) => {
-            let (emu_cols, emu_rows) = state.emu_size();
-            let shell = state.config.shell.clone();
-            let tab = state.active_tab_mut();
+            let shell      = state.config.shell.clone();
+            let font_size  = state.config.font_size as f32;
+            let (pw, ph)   = state.pane_area_px();
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let tab = &mut state.workspaces[wi].tabs[ti];
             let new_id = tab.next_pane_id;
             if let Some(new_layout) = tab.layout.split(tab.active_pane, dir, new_id) {
-                tab.layout = new_layout;
                 let cwd = tab.panes.get(&tab.active_pane).map(|p| p.cwd.clone()).unwrap_or_default();
                 let mut pane = PaneState::new(new_id, cwd.clone());
                 pane.git_branch = detect_git_branch(&cwd);
                 tab.panes.insert(new_id, pane);
                 tab.next_pane_id += 1;
-                // Re-borrow since we need to insert emulator
-                let tab = state.active_tab_mut();
-                if let Ok(emu) = Emulator::start(emu_cols, emu_rows, &shell, &cwd) {
+                tab.layout     = new_layout;
+                tab.active_pane = new_id;
+                // Resize all existing emulators to their new (smaller) area
+                let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
+                for (&pid, emu_arc) in &tab.emulators {
+                    if let Some(&(wpx, hpx)) = px_sizes.get(&pid) {
+                        let (cols, rows) = Termpp::px_to_emu(wpx, hpx, font_size);
+                        let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        emu.resize(cols, rows);
+                    }
+                }
+                // Start the new emulator at its correct size
+                // px_sizes already includes new_id (layout was updated above)
+                let new_size = px_sizes.get(&new_id)
+                    .map(|&(w, h)| Termpp::px_to_emu(w, h, font_size))
+                    .unwrap_or((80, 24));
+                if let Ok(emu) = Emulator::start(new_size.0, new_size.1, &shell, &cwd) {
                     tab.last_output_counts.insert(new_id, 0);
                     tab.emulators.insert(new_id, Arc::new(Mutex::new(emu)));
                 }
-                tab.active_pane = new_id;
             }
         }
         Message::ClosePane => {
@@ -431,6 +476,53 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::SelectPane(pane_id) => {
             state.active_tab_mut().active_pane = pane_id;
+        }
+        Message::SplitDividerDragStart(divider_id, is_vertical) => {
+            state.dragging_split = Some((divider_id, is_vertical, None));
+        }
+        Message::SplitDividerDragged(x, y) => {
+            let (divider_id, is_vertical, anchor) = match state.dragging_split {
+                Some(s) => s,
+                None    => return Task::none(),
+            };
+            let pos   = if is_vertical { x } else { y };
+            let total = if is_vertical {
+                state.window_size.0 - state.sidebar_w - DIVIDER_W
+            } else {
+                state.window_size.1
+            };
+            // On first move, record anchor (start mouse pos + start ratio)
+            let (start_pos, start_ratio) = if let Some(a) = anchor {
+                a
+            } else {
+                let wi = state.active_ws_idx();
+                let ti = state.workspaces[wi].active_tab_idx();
+                let ratio = state.workspaces[wi].tabs[ti].layout
+                    .get_ratio(divider_id).unwrap_or(0.5);
+                state.dragging_split = Some((divider_id, is_vertical, Some((pos, ratio))));
+                (pos, ratio)
+            };
+            let new_ratio = (start_ratio + (pos - start_pos) / total).clamp(0.1, 0.9);
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            state.workspaces[wi].tabs[ti].layout.set_ratio(divider_id, new_ratio);
+        }
+        Message::SplitDividerDragEnd => {
+            state.dragging_split = None;
+            // Resize all emulators in the active tab to their new correct sizes
+            let font_size = state.config.font_size as f32;
+            let (pw, ph)  = state.pane_area_px();
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let tab = &mut state.workspaces[wi].tabs[ti];
+            let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
+            for (&pid, emu_arc) in &tab.emulators {
+                let (cols, rows) = px_sizes.get(&pid)
+                    .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                    .unwrap_or((80, 24));
+                let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                emu.resize(cols, rows);
+            }
         }
         Message::ToggleHelp => {
             state.show_help = !state.show_help;
@@ -816,6 +908,7 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
             None
         }
     });
+    let is_dragging_split = state.dragging_split.is_some();
     if state.dragging_sidebar {
         let drag = iced::event::listen_with(|event, _status, _id| match event {
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
@@ -827,6 +920,17 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
             _ => None,
         });
         Subscription::batch([tick, status_tick, keyboard, resize, drag])
+    } else if is_dragging_split {
+        let split_drag = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::SplitDividerDragged(position.x, position.y))
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(_)) => {
+                Some(Message::SplitDividerDragEnd)
+            }
+            _ => None,
+        });
+        Subscription::batch([tick, status_tick, keyboard, resize, split_drag])
     } else {
         Subscription::batch([tick, status_tick, keyboard, resize])
     }
@@ -835,14 +939,18 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
 fn render_layout(
     layout:      &termpp::multiplexer::layout::Layout,
     panes:       &std::collections::HashMap<usize, PaneState>,
-    emulators:   &std::collections::HashMap<usize, std::sync::Arc<std::sync::Mutex<termpp::terminal::emulator::Emulator>>>,
+    emulators:   &std::collections::HashMap<usize, Arc<Mutex<Emulator>>>,
     active_pane: usize,
+    w_px:        f32,
+    h_px:        f32,
     font_size:   f32,
     font_name:   &'static str,
     cursor_on:   bool,
     close_key:   &str,
 ) -> Element<'static, Message> {
     use termpp::multiplexer::layout::{Layout, SplitDirection};
+
+    const SEP_PX: f32 = Layout::SEP_PX;
 
     match layout {
         Layout::Leaf(pane_id) => {
@@ -887,55 +995,79 @@ fn render_layout(
                     iced::widget::text("No pane").into()
                 };
 
-            // Active pane: 1-px accent border; inactive: transparent
-            let border_color = if is_active { AppTheme::ACCENT } else { Color::TRANSPARENT };
+            // 2-px focus indicator bar: active = ACCENT, inactive = subtle dim line
+            let bar_color = if is_active {
+                AppTheme::ACCENT
+            } else {
+                Color { r: 0.12, g: 0.12, b: 0.18, a: 1.0 }
+            };
+            let top_bar: Element<'static, Message> = container(Space::new())
+                .width(Length::Fill)
+                .height(FOCUS_BAR_H)
+                .style(move |_| iced::widget::container::Style {
+                    background: Some(Background::Color(bar_color)),
+                    ..Default::default()
+                })
+                .into();
+
             mouse_area(
-                container(content)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(move |_| iced::widget::container::Style {
-                        border: iced::Border {
-                            color: border_color,
-                            width: if is_active { 1.0 } else { 0.0 },
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    })
+                container(
+                    column![top_bar, content].width(Length::Fill).height(Length::Fill)
+                )
+                .width(w_px)
+                .height(h_px)
             )
             .on_press(Message::SelectPane(pane_id))
             .into()
         }
-        Layout::Split { direction, left, right } => {
-            let left_el  = render_layout(left,  panes, emulators, active_pane, font_size, font_name, cursor_on, close_key);
-            let right_el = render_layout(right, panes, emulators, active_pane, font_size, font_name, cursor_on, close_key);
-            let sep_color = Color { r: 0.18, g: 0.18, b: 0.26, a: 1.0 };
+        Layout::Split { direction, left, right, ratio } => {
+            let divider_id  = left.first_pane();
+            let sep_color   = Color { r: 0.18, g: 0.18, b: 0.26, a: 1.0 };
             match direction {
                 SplitDirection::Vertical => {
-                    // left | right
-                    let sep: Element<'static, Message> = container(Space::new())
-                        .width(1)
-                        .height(Length::Fill)
-                        .style(move |_| iced::widget::container::Style {
-                            background: Some(Background::Color(sep_color)),
-                            ..Default::default()
-                        })
-                        .into();
+                    let content_w = w_px - SEP_PX;
+                    let lw = (content_w * ratio).max(1.0);
+                    let rw = (content_w * (1.0 - ratio)).max(1.0);
+                    let left_el  = render_layout(left,  panes, emulators, active_pane, lw, h_px, font_size, font_name, cursor_on, close_key);
+                    let right_el = render_layout(right, panes, emulators, active_pane, rw, h_px, font_size, font_name, cursor_on, close_key);
+                    let sep: Element<'static, Message> = mouse_area(
+                        container(Space::new())
+                            .width(SEP_PX)
+                            .height(Length::Fill)
+                            .style(move |_| iced::widget::container::Style {
+                                background: Some(Background::Color(sep_color)),
+                                ..Default::default()
+                            })
+                    )
+                    .on_press(Message::SplitDividerDragStart(divider_id, true))
+                    .on_release(Message::SplitDividerDragEnd)
+                    .interaction(iced::mouse::Interaction::ResizingHorizontally)
+                    .into();
                     row![left_el, sep, right_el]
                         .width(Length::Fill)
                         .height(Length::Fill)
                         .into()
                 }
                 SplitDirection::Horizontal => {
-                    // top / bottom
-                    let sep: Element<'static, Message> = container(Space::new())
-                        .width(Length::Fill)
-                        .height(1)
-                        .style(move |_| iced::widget::container::Style {
-                            background: Some(Background::Color(sep_color)),
-                            ..Default::default()
-                        })
-                        .into();
-                    column![left_el, sep, right_el]
+                    let content_h = h_px - SEP_PX;
+                    let th = (content_h * ratio).max(1.0);
+                    let bh = (content_h * (1.0 - ratio)).max(1.0);
+                    let top_el = render_layout(left,  panes, emulators, active_pane, w_px, th, font_size, font_name, cursor_on, close_key);
+                    let bot_el = render_layout(right, panes, emulators, active_pane, w_px, bh, font_size, font_name, cursor_on, close_key);
+                    let sep: Element<'static, Message> = mouse_area(
+                        container(Space::new())
+                            .width(Length::Fill)
+                            .height(SEP_PX)
+                            .style(move |_| iced::widget::container::Style {
+                                background: Some(Background::Color(sep_color)),
+                                ..Default::default()
+                            })
+                    )
+                    .on_press(Message::SplitDividerDragStart(divider_id, false))
+                    .on_release(Message::SplitDividerDragEnd)
+                    .interaction(iced::mouse::Interaction::ResizingVertically)
+                    .into();
+                    column![top_el, sep, bot_el]
                         .width(Length::Fill)
                         .height(Length::Fill)
                         .into()
@@ -1023,11 +1155,14 @@ pub fn view(state: &Termpp) -> Element<'_, Message> {
 
     let tab = state.active_tab();
     let cursor_on = (state.blink_tick % 62) < 31;
+    let (pane_w, pane_h) = state.pane_area_px();
     let pane_view: Element<'static, Message> = render_layout(
         &tab.layout,
         &tab.panes,
         &tab.emulators,
         tab.active_pane,
+        pane_w,
+        pane_h,
         state.config.font_size as f32,
         state.font_name,
         cursor_on,
