@@ -45,22 +45,20 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
             let cell_h = self.font_size * 1.2;
 
             for row in 0..rows {
+                let row_cells = grid.visible_row(row);
                 for col in 0..cols {
-                    let cell = grid.cell(col, row);
+                    if col >= row_cells.len() { break; }
+                    let cell = &row_cells[col];
                     let x = TERM_PADDING + col as f32 * cell_w;
                     let y = TERM_PADDING + row as f32 * cell_h;
 
-                    // Draw non-default background
                     let bg = &cell.bg;
                     if (bg.0, bg.1, bg.2) != (DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2) {
                         let rect = Path::rectangle(Point::new(x, y), Size::new(cell_w, cell_h));
                         frame.fill(&rect, Color::from_rgb8(bg.0, bg.1, bg.2));
                     }
 
-                    // Skip space and continuation cells (backgrounds already drawn above)
-                    if cell.ch == ' ' || cell.ch == '\0' {
-                        continue;
-                    }
+                    if cell.ch == ' ' || cell.ch == '\0' { continue; }
 
                     let fg = &cell.fg;
                     frame.fill_text(canvas::Text {
@@ -77,12 +75,27 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
                 }
             }
 
-            // Draw cursor: thin vertical bar, blinks with cursor_on
-            if self.cursor_on {
+            // Cursor: only when at live view (scroll_offset == 0)
+            if self.cursor_on && grid.scroll_offset() == 0 {
                 let cx = TERM_PADDING + grid.cursor_col as f32 * cell_w;
                 let cy = TERM_PADDING + grid.cursor_row as f32 * cell_h;
-                let bar = Path::rectangle(Point::new(cx, cy + cell_h - 3.0), Size::new(cell_w, 3.0));
+                let bar = Path::rectangle(
+                    Point::new(cx, cy + cell_h - 3.0),
+                    Size::new(cell_w, 3.0),
+                );
                 frame.fill(&bar, iced::Color { r: 0.85, g: 0.90, b: 1.0, a: 1.0 });
+            }
+
+            // Scrollback indicator
+            if grid.scroll_offset() > 0 {
+                let label = format!("↑ {} lignes", grid.scroll_offset());
+                frame.fill_text(canvas::Text {
+                    content: label,
+                    position: Point::new(bounds.width - 90.0, TERM_PADDING),
+                    color: Color { r: 0.39, g: 0.44, b: 0.53, a: 1.0 },
+                    size: iced::Pixels(11.0),
+                    ..canvas::Text::default()
+                });
             }
         }
 
