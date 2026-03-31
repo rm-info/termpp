@@ -574,12 +574,43 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
 
         Message::SelectionEnd => {
-            // Clipboard copy will be added in Task 6; just deactivate drag here
             state.is_selecting = None;
+            // Copy selected text to clipboard
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let active_id = state.workspaces[wi].tabs[ti].active_pane;
+            let tab = &state.workspaces[wi].tabs[ti];
+            if let Some(pane) = tab.panes.get(&active_id) {
+                if let Some(sel) = pane.selection {
+                    if let Some(emu_arc) = tab.emulators.get(&active_id) {
+                        let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                        let text = extract_selection_text(&grid, sel);
+                        drop(grid); drop(emu);
+                        if !text.is_empty() {
+                            if let Ok(mut cb) = arboard::Clipboard::new() {
+                                let _ = cb.set_text(text);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        Message::PasteFromClipboard(_pane_id) => {
-            // Clipboard paste will be added in Task 6
+        Message::PasteFromClipboard(pane_id) => {
+            // Also focus the pane
+            state.active_tab_mut().active_pane = pane_id;
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                if let Ok(text) = cb.get_text() {
+                    let wi = state.active_ws_idx();
+                    let ti = state.workspaces[wi].active_tab_idx();
+                    let tab = &state.workspaces[wi].tabs[ti];
+                    if let Some(emu_arc) = tab.emulators.get(&pane_id) {
+                        let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        let _ = emu.write_input(text.as_bytes());
+                    }
+                }
+            }
         }
 
         Message::SplitDividerDragStart(divider_id, is_vertical) => {
@@ -1108,7 +1139,6 @@ fn normalize_selection(
 }
 
 /// Extracts the selected text from the grid (using visible_row for scrollback awareness).
-#[allow(dead_code)]
 fn extract_selection_text(
     grid: &termpp::terminal::grid::GridPerformer,
     sel: ((usize, usize), (usize, usize)),
