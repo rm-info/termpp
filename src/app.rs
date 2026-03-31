@@ -71,7 +71,6 @@ pub enum Message {
     ClosePane,
     FocusNext,
     FocusPrev,
-    SelectPane(usize),        // click-to-focus in split layout
     PaneScrolled(usize, f32),   // (pane_id, y_delta): positive = scroll up into history
     MouseMoved(iced::Point),           // tracks cursor position for selection start
     SelectionStart(usize),             // pane_id; uses state.mouse_pos for start coords
@@ -487,9 +486,6 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             if let Some(pos) = ids.iter().position(|&id| id == tab.active_pane) {
                 tab.active_pane = ids[(pos + ids.len() - 1) % ids.len()];
             }
-        }
-        Message::SelectPane(pane_id) => {
-            state.active_tab_mut().active_pane = pane_id;
         }
         Message::PaneScrolled(pane_id, delta) => {
             let wi = state.active_ws_idx();
