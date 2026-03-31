@@ -3,7 +3,7 @@ use crate::terminal::grid::TermEvent;
 use crate::multiplexer::pane::PaneState;
 
 pub struct NotificationDetector {
-    idle_timeout: Duration,
+    pub idle_timeout: Duration,
 }
 
 impl NotificationDetector {

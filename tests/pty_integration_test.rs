@@ -5,7 +5,9 @@ use std::time::Duration;
 #[tokio::test]
 #[ignore]
 async fn emulator_captures_echo_output() {
-    let mut emu = Emulator::start(80, 24).expect("spawn failed");
+    let cwd = std::path::Path::new(".");
+    let shell = if cfg!(windows) { "cmd" } else { "sh" };
+    let mut emu = Emulator::start(80, 24, shell, cwd).expect("spawn failed");
 
     #[cfg(windows)]
     emu.write_input(b"echo hello\r\n").unwrap();

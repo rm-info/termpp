@@ -12,4 +12,6 @@ impl Theme {
     pub const TEXT_DIM:     Color = Color { r: 0.39, g: 0.44, b: 0.53, a: 1.0 };
     pub const BADGE_ACTIVE: Color = Color { r: 0.20, g: 0.83, b: 0.60, a: 1.0 };
     pub const ACCENT:       Color = Color { r: 0.33, g: 0.73, b: 1.0,  a: 1.0 };
+    /// Workspace-level accent bar: softer blue-lavender (#89b4fa)
+    pub const ACCENT_WS:    Color = Color { r: 0.54, g: 0.71, b: 0.98, a: 1.0 };
 }

@@ -1,19 +1,17 @@
 use std::sync::{Arc, Mutex};
 
 use iced::mouse;
-use iced::widget::canvas::{self, Frame, Path, Stroke};
+use iced::widget::canvas::{self, Frame, Path};
 use iced::{Color, Element, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::terminal::grid::{GridPerformer, DEFAULT_BG};
-use crate::ui::theme::Theme as AppTheme;
 
-/// Inset from the blue border to where text begins (pixels).
+/// Inset from the pane edge to where text begins (pixels).
 pub const TERM_PADDING: f32 = 8.0;
 
 /// A canvas program that renders a terminal grid.
 struct TerminalProgram {
     grid: Arc<Mutex<GridPerformer>>,
-    is_waiting: bool,
     font_size: f32,
     font_name: &'static str,
     cursor_on: bool,
@@ -88,19 +86,6 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
             }
         }
 
-        // Draw waiting ring outline
-        if self.is_waiting {
-            let inset = 2.0;
-            let outline = Path::rectangle(
-                Point::new(inset, inset),
-                Size::new(bounds.width - inset * 2.0, bounds.height - inset * 2.0),
-            );
-            let stroke = Stroke::default()
-                .with_color(AppTheme::RING_WAITING)
-                .with_width(3.0);
-            frame.stroke(&outline, stroke);
-        }
-
         vec![frame.into_geometry()]
     }
 }
@@ -108,7 +93,6 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
 /// Widget that wraps a terminal grid and renders it via iced Canvas.
 pub struct TerminalPane {
     grid: Arc<Mutex<GridPerformer>>,
-    is_waiting: bool,
     font_size: f32,
     font_name: &'static str,
     cursor_on: bool,
@@ -117,18 +101,16 @@ pub struct TerminalPane {
 impl TerminalPane {
     pub fn new(
         grid: Arc<Mutex<GridPerformer>>,
-        is_waiting: bool,
         font_size: f32,
         font_name: &'static str,
         cursor_on: bool,
     ) -> Self {
-        Self { grid, is_waiting, font_size, font_name, cursor_on }
+        Self { grid, font_size, font_name, cursor_on }
     }
 
     pub fn view<Message: 'static>(&self) -> Element<'static, Message> {
         iced::widget::canvas(TerminalProgram {
             grid: Arc::clone(&self.grid),
-            is_waiting: self.is_waiting,
             font_size: self.font_size,
             font_name: self.font_name,
             cursor_on: self.cursor_on,

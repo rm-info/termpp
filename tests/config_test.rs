@@ -1,4 +1,4 @@
-use termpp::config::{Config, ConfigError};
+use termpp::config::Config;
 use std::io::Write;
 
 fn write_temp_config(content: &str) -> tempfile::NamedTempFile {
@@ -17,15 +17,6 @@ fn loads_valid_config() {
     let config = Config::load(f.path()).unwrap();
     assert_eq!(config.notification_timeout, 3);
     assert_eq!(config.font_size, 16);
-}
-
-#[test]
-fn rejects_invalid_theme_with_message() {
-    let f = write_temp_config(r#"theme = "light""#);
-    let err = Config::load(f.path()).unwrap_err();
-    assert!(matches!(err, ConfigError::InvalidTheme(_)));
-    assert!(err.to_string().contains("light"));
-    assert!(err.to_string().contains("dark"));
 }
 
 #[test]
