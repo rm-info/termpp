@@ -9,9 +9,26 @@ use crate::terminal::grid::{GridPerformer, DEFAULT_BG};
 /// Inset from the pane edge to where text begins (pixels).
 pub const TERM_PADDING: f32 = 8.0;
 
+/// Returns true if (col, row) falls within the selection range (reading order, row-major).
+fn is_cell_selected(
+    sel: Option<((usize, usize), (usize, usize))>,
+    col: usize,
+    row: usize,
+) -> bool {
+    let Some(((sc, sr), (ec, er))) = sel else { return false };
+    // Normalise so start ≤ end
+    let (sc, sr, ec, er) = if sr < er || (sr == er && sc <= ec) {
+        (sc, sr, ec, er)
+    } else {
+        (ec, er, sc, sr)
+    };
+    (row > sr || (row == sr && col >= sc)) && (row < er || (row == er && col <= ec))
+}
+
 /// A canvas program that renders a terminal grid.
 struct TerminalProgram {
-    grid: Arc<Mutex<GridPerformer>>,
+    grid:      Arc<Mutex<GridPerformer>>,
+    selection: Option<((usize, usize), (usize, usize))>,
     font_size: f32,
     font_name: &'static str,
     cursor_on: bool,
@@ -45,28 +62,34 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
             let cell_h = self.font_size * 1.2;
 
             for row in 0..rows {
+                let row_cells = grid.visible_row(row);
                 for col in 0..cols {
-                    let cell = grid.cell(col, row);
+                    if col >= row_cells.len() { break; }
+                    let cell = &row_cells[col];
                     let x = TERM_PADDING + col as f32 * cell_w;
                     let y = TERM_PADDING + row as f32 * cell_h;
 
-                    // Draw non-default background
-                    let bg = &cell.bg;
-                    if (bg.0, bg.1, bg.2) != (DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2) {
+                    let selected = is_cell_selected(self.selection, col, row);
+                    let (draw_fg, draw_bg) = if selected {
+                        (cell.bg.clone(), cell.fg.clone())   // inverted
+                    } else {
+                        (cell.fg.clone(), cell.bg.clone())
+                    };
+
+                    let default_bg = DEFAULT_BG;
+                    let show_bg = selected
+                        || (draw_bg.0, draw_bg.1, draw_bg.2) != (default_bg.0, default_bg.1, default_bg.2);
+                    if show_bg {
                         let rect = Path::rectangle(Point::new(x, y), Size::new(cell_w, cell_h));
-                        frame.fill(&rect, Color::from_rgb8(bg.0, bg.1, bg.2));
+                        frame.fill(&rect, Color::from_rgb8(draw_bg.0, draw_bg.1, draw_bg.2));
                     }
 
-                    // Skip space and continuation cells (backgrounds already drawn above)
-                    if cell.ch == ' ' || cell.ch == '\0' {
-                        continue;
-                    }
+                    if cell.ch == ' ' || cell.ch == '\0' { continue; }
 
-                    let fg = &cell.fg;
                     frame.fill_text(canvas::Text {
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),
-                        color: Color::from_rgb8(fg.0, fg.1, fg.2),
+                        color: Color::from_rgb8(draw_fg.0, draw_fg.1, draw_fg.2),
                         size: iced::Pixels(self.font_size),
                         font: iced::Font {
                             family: iced::font::Family::Name(self.font_name),
@@ -77,12 +100,27 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
                 }
             }
 
-            // Draw cursor: thin vertical bar, blinks with cursor_on
-            if self.cursor_on {
+            // Cursor: only when at live view (scroll_offset == 0)
+            if self.cursor_on && grid.scroll_offset() == 0 {
                 let cx = TERM_PADDING + grid.cursor_col as f32 * cell_w;
                 let cy = TERM_PADDING + grid.cursor_row as f32 * cell_h;
-                let bar = Path::rectangle(Point::new(cx, cy + cell_h - 3.0), Size::new(cell_w, 3.0));
+                let bar = Path::rectangle(
+                    Point::new(cx, cy + cell_h - 3.0),
+                    Size::new(cell_w, 3.0),
+                );
                 frame.fill(&bar, iced::Color { r: 0.85, g: 0.90, b: 1.0, a: 1.0 });
+            }
+
+            // Scrollback indicator
+            if grid.scroll_offset() > 0 {
+                let label = format!("↑ {} lignes", grid.scroll_offset());
+                frame.fill_text(canvas::Text {
+                    content: label,
+                    position: Point::new(bounds.width - 90.0, TERM_PADDING),
+                    color: Color { r: 0.39, g: 0.44, b: 0.53, a: 1.0 },
+                    size: iced::Pixels(11.0),
+                    ..canvas::Text::default()
+                });
             }
         }
 
@@ -92,7 +130,8 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
 
 /// Widget that wraps a terminal grid and renders it via iced Canvas.
 pub struct TerminalPane {
-    grid: Arc<Mutex<GridPerformer>>,
+    grid:      Arc<Mutex<GridPerformer>>,
+    selection: Option<((usize, usize), (usize, usize))>,
     font_size: f32,
     font_name: &'static str,
     cursor_on: bool,
@@ -100,17 +139,19 @@ pub struct TerminalPane {
 
 impl TerminalPane {
     pub fn new(
-        grid: Arc<Mutex<GridPerformer>>,
+        grid:      Arc<Mutex<GridPerformer>>,
+        selection: Option<((usize, usize), (usize, usize))>,
         font_size: f32,
         font_name: &'static str,
         cursor_on: bool,
     ) -> Self {
-        Self { grid, font_size, font_name, cursor_on }
+        Self { grid, selection, font_size, font_name, cursor_on }
     }
 
     pub fn view<Message: 'static>(&self) -> Element<'static, Message> {
         iced::widget::canvas(TerminalProgram {
-            grid: Arc::clone(&self.grid),
+            grid:      Arc::clone(&self.grid),
+            selection: self.selection,
             font_size: self.font_size,
             font_name: self.font_name,
             cursor_on: self.cursor_on,

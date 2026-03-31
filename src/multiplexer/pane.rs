@@ -19,6 +19,9 @@ pub struct PaneState {
     pub pane_name: Option<String>,
     /// Title set by the running application via OSC 0/2 escape sequence.
     pub terminal_title: Option<String>,
+    /// Active text selection: ((start_col, start_row), (end_col, end_row)) in visual coordinates.
+    /// None when no selection is active.
+    pub selection: Option<((usize, usize), (usize, usize))>,
 }
 
 impl PaneState {
@@ -31,6 +34,7 @@ impl PaneState {
             git_branch: None,
             pane_name: None,
             terminal_title: None,
+            selection: None,
         }
     }
 
