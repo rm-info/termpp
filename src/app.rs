@@ -29,6 +29,8 @@ const CHAR_W_RATIO: f32   = 0.6;
 const LINE_H_RATIO: f32   = 1.2;
 /// Width of the per-pane focus indicator bar on the left edge (pixels).
 const ACCENT_BAR_W: f32   = 3.0;
+/// Split-divider separator thickness in pixels (mirrors Layout::SEP_PX).
+const SEP_PX: f32         = 4.0;
 
 pub struct Termpp {
     config:             Config,
@@ -51,6 +53,10 @@ pub struct Termpp {
     blink_tick:         u8,
     /// Split divider being dragged: (divider_id, is_vertical, Option<(start_mouse, start_ratio)>).
     dragging_split:     Option<(usize, bool, Option<(f32, f32)>)>,
+    /// Last known cursor position (absolute window coords), updated via on_move.
+    mouse_pos:    iced::Point,
+    /// Some(pane_id) while user is drag-selecting; None otherwise.
+    is_selecting: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +73,11 @@ pub enum Message {
     FocusPrev,
     SelectPane(usize),        // click-to-focus in split layout
     PaneScrolled(usize, f32),   // (pane_id, y_delta): positive = scroll up into history
+    MouseMoved(iced::Point),           // tracks cursor position for selection start
+    SelectionStart(usize),             // pane_id; uses state.mouse_pos for start coords
+    SelectionDrag(f32, f32),           // absolute cursor pos during drag
+    SelectionEnd,                       // finalise selection (copy in Task 6)
+    PasteFromClipboard(usize),         // pane_id
     SplitDividerDragStart(usize, bool),  // (divider_id, is_vertical)
     SplitDividerDragged(f32, f32),       // (mouse_x, mouse_y)
     SplitDividerDragEnd,
@@ -199,6 +210,8 @@ pub fn boot() -> (Termpp, Task<Message>) {
         font_name,
         blink_tick:        0,
         dragging_split:    None,
+        mouse_pos:         iced::Point::ORIGIN,
+        is_selecting:      None,
     };
 
     (app, Task::none())
@@ -493,6 +506,82 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::MouseMoved(pos) => {
+            state.mouse_pos = pos;
+        }
+
+        Message::SelectionStart(pane_id) => {
+            // Focus the pane
+            state.active_tab_mut().active_pane = pane_id;
+            // Clear any existing selection in all panes of the active tab
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            for pane in state.workspaces[wi].tabs[ti].panes.values_mut() {
+                pane.selection = None;
+            }
+            // Compute start cell from current mouse position
+            let (pw, ph) = state.pane_area_px();
+            let pane_area_x = state.sidebar_w + DIVIDER_W;
+            let tab = &state.workspaces[wi].tabs[ti];
+            if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
+                let emu_arc = tab.emulators.get(&pane_id).cloned();
+                if let Some(emu_arc) = emu_arc {
+                    let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                    let cell = pixel_to_cell(
+                        state.mouse_pos.x, state.mouse_pos.y,
+                        ox, oy,
+                        state.config.font_size as f32,
+                        grid.cols(), grid.rows(),
+                    );
+                    drop(grid); drop(emu);
+                    let tab = &mut state.workspaces[wi].tabs[ti];
+                    if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                        pane.selection = Some((cell, cell));
+                    }
+                }
+            }
+            state.is_selecting = Some(pane_id);
+        }
+
+        Message::SelectionDrag(x, y) => {
+            if let Some(pane_id) = state.is_selecting {
+                let (pw, ph) = state.pane_area_px();
+                let pane_area_x = state.sidebar_w + DIVIDER_W;
+                let wi = state.active_ws_idx();
+                let ti = state.workspaces[wi].active_tab_idx();
+                let tab = &state.workspaces[wi].tabs[ti];
+                if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
+                    let emu_arc = tab.emulators.get(&pane_id).cloned();
+                    if let Some(emu_arc) = emu_arc {
+                        let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                        let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                        let end_cell = pixel_to_cell(
+                            x, y, ox, oy,
+                            state.config.font_size as f32,
+                            grid.cols(), grid.rows(),
+                        );
+                        drop(grid); drop(emu);
+                        let tab = &mut state.workspaces[wi].tabs[ti];
+                        if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                            if let Some(sel) = pane.selection.as_mut() {
+                                sel.1 = end_cell;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Message::SelectionEnd => {
+            // Clipboard copy will be added in Task 6; just deactivate drag here
+            state.is_selecting = None;
+        }
+
+        Message::PasteFromClipboard(_pane_id) => {
+            // Clipboard paste will be added in Task 6
+        }
+
         Message::SplitDividerDragStart(divider_id, is_vertical) => {
             state.dragging_split = Some((divider_id, is_vertical, None));
         }
@@ -947,9 +1036,101 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
             _ => None,
         });
         Subscription::batch([tick, status_tick, keyboard, resize, split_drag])
+    } else if state.is_selecting.is_some() {
+        let sel_drag = iced::event::listen_with(|event, _status, _id| match event {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+                Some(Message::SelectionDrag(position.x, position.y))
+            }
+            iced::Event::Mouse(
+                iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left),
+            ) => Some(Message::SelectionEnd),
+            _ => None,
+        });
+        Subscription::batch([tick, status_tick, keyboard, resize, sel_drag])
     } else {
         Subscription::batch([tick, status_tick, keyboard, resize])
     }
+}
+
+/// Returns the absolute (x, y) top-left corner of `target` pane within the layout.
+fn pane_origin(
+    layout: &termpp::multiplexer::layout::Layout,
+    target: usize,
+    x: f32, y: f32, w: f32, h: f32,
+) -> Option<(f32, f32)> {
+    use termpp::multiplexer::layout::{Layout, SplitDirection};
+    match layout {
+        Layout::Leaf(id) if *id == target => Some((x, y)),
+        Layout::Leaf(_) => None,
+        Layout::Split { direction, left, right, ratio, .. } => {
+            let content = match direction {
+                SplitDirection::Vertical   => w - SEP_PX,
+                SplitDirection::Horizontal => h - SEP_PX,
+            };
+            match direction {
+                SplitDirection::Vertical => {
+                    let lw = (content * ratio).max(1.0);
+                    let rw = (content * (1.0 - ratio)).max(1.0);
+                    pane_origin(left, target, x, y, lw, h)
+                        .or_else(|| pane_origin(right, target, x + lw + SEP_PX, y, rw, h))
+                }
+                SplitDirection::Horizontal => {
+                    let lh = (content * ratio).max(1.0);
+                    let rh = (content * (1.0 - ratio)).max(1.0);
+                    pane_origin(left, target, x, y, w, lh)
+                        .or_else(|| pane_origin(right, target, x, y + lh + SEP_PX, w, rh))
+                }
+            }
+        }
+    }
+}
+
+/// Converts absolute window coordinates to (col, row) in the terminal grid.
+fn pixel_to_cell(
+    abs_x: f32, abs_y: f32,
+    origin_x: f32, origin_y: f32,
+    font_size: f32,
+    cols: usize, rows: usize,
+) -> (usize, usize) {
+    let rel_x = (abs_x - origin_x - ACCENT_BAR_W - TERM_PADDING).max(0.0);
+    let rel_y = (abs_y - origin_y - TERM_PADDING).max(0.0);
+    let col = (rel_x / (font_size * CHAR_W_RATIO)).floor() as usize;
+    let row = (rel_y / (font_size * LINE_H_RATIO)).floor() as usize;
+    (col.min(cols.saturating_sub(1)), row.min(rows.saturating_sub(1)))
+}
+
+/// Normalises a selection so start <= end in reading order (row-major).
+fn normalize_selection(
+    sel: ((usize, usize), (usize, usize)),
+) -> ((usize, usize), (usize, usize)) {
+    let ((sc, sr), (ec, er)) = sel;
+    if sr < er || (sr == er && sc <= ec) { sel } else { ((ec, er), (sc, sr)) }
+}
+
+/// Extracts the selected text from the grid (using visible_row for scrollback awareness).
+#[allow(dead_code)]
+fn extract_selection_text(
+    grid: &termpp::terminal::grid::GridPerformer,
+    sel: ((usize, usize), (usize, usize)),
+) -> String {
+    let ((sc, sr), (ec, er)) = normalize_selection(sel);
+    let mut lines = Vec::new();
+    for row in sr..=er {
+        let start_col = if row == sr { sc } else { 0 };
+        let end_col   = if row == er { ec } else { grid.cols().saturating_sub(1) };
+        let row_cells = grid.visible_row(row);
+        let text: String = row_cells
+            .iter()
+            .enumerate()
+            .filter(|&(c, _)| c >= start_col && c <= end_col)
+            .filter(|(_, cell)| cell.ch != '\0')
+            .map(|(_, cell)| cell.ch)
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        lines.push(text);
+    }
+    lines.join("\n")
 }
 
 fn render_layout(
@@ -965,8 +1146,6 @@ fn render_layout(
     close_key:   &str,
 ) -> Element<'static, Message> {
     use termpp::multiplexer::layout::{Layout, SplitDirection};
-
-    const SEP_PX: f32 = Layout::SEP_PX;
 
     match layout {
         Layout::Leaf(pane_id) => {
@@ -1027,7 +1206,10 @@ fn render_layout(
                 .width(w_px)
                 .height(h_px)
             )
-            .on_press(Message::SelectPane(pane_id))
+            .on_move(move |pos| Message::MouseMoved(pos))
+            .on_press(Message::SelectionStart(pane_id))
+            .on_release(Message::SelectionEnd)
+            .on_right_press(Message::PasteFromClipboard(pane_id))
             .on_scroll(move |delta| {
                 let y = match delta {
                     iced::mouse::ScrollDelta::Lines  { y, .. } => y,
