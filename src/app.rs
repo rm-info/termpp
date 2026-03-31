@@ -1209,6 +1209,7 @@ fn render_layout(
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                         TerminalPane::new(
                             Arc::clone(&emu.grid),
+                            panes.get(&pane_id).and_then(|p| p.selection),
                             font_size,
                             font_name,
                             cursor_on,
