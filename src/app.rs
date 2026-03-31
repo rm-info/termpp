@@ -66,6 +66,7 @@ pub enum Message {
     FocusNext,
     FocusPrev,
     SelectPane(usize),        // click-to-focus in split layout
+    PaneScrolled(usize, f32),   // (pane_id, y_delta): positive = scroll up into history
     SplitDividerDragStart(usize, bool),  // (divider_id, is_vertical)
     SplitDividerDragged(f32, f32),       // (mouse_x, mouse_y)
     SplitDividerDragEnd,
@@ -476,6 +477,21 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::SelectPane(pane_id) => {
             state.active_tab_mut().active_pane = pane_id;
+        }
+        Message::PaneScrolled(pane_id, delta) => {
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let tab = &state.workspaces[wi].tabs[ti];
+            if let Some(emu_arc) = tab.emulators.get(&pane_id) {
+                let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                let mut grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                let lines = (delta.abs() * 3.0).round() as usize;
+                if delta > 0.0 {
+                    grid.scroll_up_by(lines);
+                } else {
+                    grid.scroll_down_by(lines);
+                }
+            }
         }
         Message::SplitDividerDragStart(divider_id, is_vertical) => {
             state.dragging_split = Some((divider_id, is_vertical, None));
@@ -1012,6 +1028,13 @@ fn render_layout(
                 .height(h_px)
             )
             .on_press(Message::SelectPane(pane_id))
+            .on_scroll(move |delta| {
+                let y = match delta {
+                    iced::mouse::ScrollDelta::Lines  { y, .. } => y,
+                    iced::mouse::ScrollDelta::Pixels { y, .. } => y / 20.0,
+                };
+                Message::PaneScrolled(pane_id, y)
+            })
             .into()
         }
         Layout::Split { split_id, direction, left, right, ratio } => {
