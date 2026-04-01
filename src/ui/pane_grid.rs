@@ -63,29 +63,54 @@ impl<Message> canvas::Program<Message, Theme, Renderer> for TerminalProgram {
 
             for row in 0..rows {
                 let row_cells = grid.visible_row(row);
+                let y = TERM_PADDING + row as f32 * cell_h;
+
+                // Pass 1: draw background as merged runs to avoid sub-pixel gaps
+                let mut run_col: usize = 0;
+                let mut run_bg: Option<(u8, u8, u8)> = None;
+                let flush_run = |start: usize, end: usize, bg: (u8, u8, u8), frame: &mut Frame| {
+                    if start < end {
+                        // Round to integer pixel boundaries so adjacent runs tile
+                        // perfectly with no sub-pixel gaps.
+                        let rx = (TERM_PADDING + start as f32 * cell_w).floor();
+                        let rx_end = (TERM_PADDING + end as f32 * cell_w).ceil();
+                        let rect = Path::rectangle(Point::new(rx, y.floor()), Size::new(rx_end - rx, cell_h.ceil()));
+                        frame.fill(&rect, Color::from_rgb8(bg.0, bg.1, bg.2));
+                    }
+                };
+                for col in 0..=cols {
+                    let bg_key: Option<(u8, u8, u8)> = if col < cols && col < row_cells.len() {
+                        let cell = &row_cells[col];
+                        let selected = is_cell_selected(self.selection, col, row);
+                        let draw_bg = if selected { &cell.fg } else { &cell.bg };
+                        if selected || (draw_bg.0, draw_bg.1, draw_bg.2) != (DEFAULT_BG.0, DEFAULT_BG.1, DEFAULT_BG.2) {
+                            Some((draw_bg.0, draw_bg.1, draw_bg.2))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    match (run_bg, bg_key) {
+                        (Some(prev), Some(cur)) if prev == cur => {} // extend run
+                        (Some(prev), _) => {
+                            flush_run(run_col, col, prev, &mut frame);
+                            run_col = col;
+                            run_bg = bg_key;
+                        }
+                        (None, Some(_)) => { run_col = col; run_bg = bg_key; }
+                        (None, None) => {}
+                    }
+                }
+
+                // Pass 2: draw glyphs
                 for col in 0..cols {
                     if col >= row_cells.len() { break; }
                     let cell = &row_cells[col];
-                    let x = TERM_PADDING + col as f32 * cell_w;
-                    let y = TERM_PADDING + row as f32 * cell_h;
-
-                    let selected = is_cell_selected(self.selection, col, row);
-                    let (draw_fg, draw_bg) = if selected {
-                        (cell.bg.clone(), cell.fg.clone())   // inverted
-                    } else {
-                        (cell.fg.clone(), cell.bg.clone())
-                    };
-
-                    let default_bg = DEFAULT_BG;
-                    let show_bg = selected
-                        || (draw_bg.0, draw_bg.1, draw_bg.2) != (default_bg.0, default_bg.1, default_bg.2);
-                    if show_bg {
-                        let rect = Path::rectangle(Point::new(x, y), Size::new(cell_w, cell_h));
-                        frame.fill(&rect, Color::from_rgb8(draw_bg.0, draw_bg.1, draw_bg.2));
-                    }
-
                     if cell.ch == ' ' || cell.ch == '\0' { continue; }
-
+                    let x = TERM_PADDING + col as f32 * cell_w;
+                    let selected = is_cell_selected(self.selection, col, row);
+                    let draw_fg = if selected { &cell.bg } else { &cell.fg };
                     frame.fill_text(canvas::Text {
                         content: cell.ch.to_string(),
                         position: Point::new(x, y),

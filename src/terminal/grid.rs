@@ -74,6 +74,7 @@ pub struct GridPerformer {
     rows: usize,
     current_fg: Color,
     current_bg: Color,
+    reverse_video: bool,
     event_tx: mpsc::Sender<TermEvent>,
     scrollback:    VecDeque<Vec<Cell>>,
     scroll_offset: usize,
@@ -89,6 +90,7 @@ impl GridPerformer {
             cols, rows,
             current_fg: DEFAULT_FG.clone(),
             current_bg: DEFAULT_BG.clone(),
+            reverse_video: false,
             event_tx,
             scrollback:    VecDeque::new(),
             scroll_offset: 0,
@@ -153,14 +155,20 @@ impl GridPerformer {
     fn write_char(&mut self, c: char) {
         if self.cursor_col >= self.cols { self.cursor_col = 0; self.advance_row(); }
         let w = UnicodeWidthChar::width(c).unwrap_or(1).max(1);
-        self.cells[self.cursor_row][self.cursor_col] =
-            Cell { ch: c, fg: self.current_fg.clone(), bg: self.current_bg.clone() };
+        let (fg, bg) = if self.reverse_video {
+            (self.current_bg.clone(), self.current_fg.clone())
+        } else {
+            (self.current_fg.clone(), self.current_bg.clone())
+        };
+        self.cells[self.cursor_row][self.cursor_col] = Cell { ch: c, fg, bg };
         self.cursor_col += 1;
-        // Wide chars occupy two columns — mark the second as a continuation cell
-        // so rendering skips it for the glyph but still fills its background.
         if w == 2 && self.cursor_col < self.cols {
-            self.cells[self.cursor_row][self.cursor_col] =
-                Cell { ch: '\0', fg: self.current_fg.clone(), bg: self.current_bg.clone() };
+            let (fg2, bg2) = if self.reverse_video {
+                (self.current_bg.clone(), self.current_fg.clone())
+            } else {
+                (self.current_fg.clone(), self.current_bg.clone())
+            };
+            self.cells[self.cursor_row][self.cursor_col] = Cell { ch: '\0', fg: fg2, bg: bg2 };
             self.cursor_col += 1;
         }
     }
@@ -217,7 +225,9 @@ impl GridPerformer {
         let mut i = 0;
         while i < all.len() {
             match all[i] {
-                0        => { self.current_fg = DEFAULT_FG.clone(); self.current_bg = DEFAULT_BG.clone(); }
+                0        => { self.current_fg = DEFAULT_FG.clone(); self.current_bg = DEFAULT_BG.clone(); self.reverse_video = false; }
+                7        => { self.reverse_video = true; }
+                27       => { self.reverse_video = false; }
                 30..=37  => { self.current_fg = ANSI_COLORS[(all[i] - 30) as usize].clone(); }
                 39       => { self.current_fg = DEFAULT_FG.clone(); }
                 40..=47  => { self.current_bg = ANSI_COLORS[(all[i] - 40) as usize].clone(); }

@@ -51,6 +51,14 @@ pub fn help_overlay<Message: Clone + 'static>(
         })
         .into();
 
+    let mouse_actions: Vec<(&'static str, &'static str)> = vec![
+        ("Sélectionner du texte",   "Clic gauche + glisser"),
+        ("Sélectionner le mot",     "Double-clic"),
+        ("Copier la sélection",     "Relâcher le clic"),
+        ("Coller",                  "Clic droit"),
+        ("Défiler l'historique",    "Molette"),
+    ];
+
     let mut rows: Vec<Element<'static, Message>> = vec![header, separator];
 
     for (label, key) in shortcuts {
@@ -79,6 +87,52 @@ pub fn help_overlay<Message: Clone + 'static>(
         .into();
 
         rows.push(shortcut_row);
+    }
+
+    // Mouse section separator + header
+    let mouse_sep: Element<'static, Message> = container(Space::new().height(1))
+        .width(Length::Fill)
+        .style(|_| iced::widget::container::Style {
+            background: Some(Background::Color(AppTheme::PANE_BORDER)),
+            ..Default::default()
+        })
+        .into();
+    rows.push(mouse_sep);
+
+    let mouse_header: Element<'static, Message> =
+        text("Souris")
+            .color(AppTheme::TEXT_PRIMARY)
+            .size(13)
+            .font(iced::Font { weight: iced::font::Weight::Bold, ..iced::Font::DEFAULT })
+            .into();
+    rows.push(mouse_header);
+
+    for (label, action) in mouse_actions {
+        let badge: Element<'static, Message> = container(
+            text(action).color(AppTheme::TEXT_PRIMARY).size(12)
+        )
+        .padding([2, 6])
+        .style(|_| iced::widget::container::Style {
+            background: Some(Background::Color(
+                Color { r: 0.10, g: 0.10, b: 0.15, a: 1.0 }
+            )),
+            border: iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .into();
+
+        let action_row: Element<'static, Message> = row![
+            text(label).color(AppTheme::TEXT_DIM).size(12),
+            Space::new().width(Length::Fill),
+            badge,
+        ]
+        .align_y(iced::Alignment::Center)
+        .into();
+
+        rows.push(action_row);
     }
 
     let card_content = column(rows).spacing(8);

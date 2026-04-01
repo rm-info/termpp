@@ -27,8 +27,8 @@ const DIVIDER_W: f32      = 4.0;
 const CHAR_W_RATIO: f32   = 0.6;
 /// Line height ratio: height ≈ font_size × 1.4
 const LINE_H_RATIO: f32   = 1.2;
-/// Width of the per-pane focus indicator bar on the left edge (pixels).
-const ACCENT_BAR_W: f32   = 3.0;
+/// Border width of the active-pane focus indicator (pixels).
+const ACTIVE_BORDER_W: f32 = 2.0;
 /// Split-divider separator thickness in pixels (mirrors Layout::SEP_PX).
 const SEP_PX: f32         = 4.0;
 
@@ -57,6 +57,8 @@ pub struct Termpp {
     mouse_pos:    iced::Point,
     /// Some(pane_id) while user is drag-selecting; None otherwise.
     is_selecting: Option<usize>,
+    /// Start cell of an in-progress selection; None until a drag actually begins.
+    selection_anchor: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +78,7 @@ pub enum Message {
     SelectionStart(usize),             // pane_id; uses state.mouse_pos for start coords
     SelectionDrag(f32, f32),           // absolute cursor pos during drag
     SelectionEnd,                       // finalise selection (copy in Task 6)
+    WordSelectAt(usize),               // pane_id; double-click selects word under cursor
     PasteFromClipboard(usize),         // pane_id
     SplitDividerDragStart(usize, bool),  // (divider_id, is_vertical)
     SplitDividerDragged(f32, f32),       // (mouse_x, mouse_y)
@@ -126,9 +129,9 @@ impl Termpp {
 
     fn emu_size(&self) -> (u16, u16) {
         let (ww, wh) = self.window_size;
-        let cols = ((ww - self.sidebar_w - DIVIDER_W - ACCENT_BAR_W - TERM_PADDING * 2.0)
+        let cols = ((ww - self.sidebar_w - DIVIDER_W - ACTIVE_BORDER_W * 2.0 - TERM_PADDING * 2.0)
             / (self.config.font_size as f32 * CHAR_W_RATIO)).floor() as u16;
-        let rows = ((wh - TERM_PADDING * 2.0)
+        let rows = ((wh - ACTIVE_BORDER_W * 2.0 - TERM_PADDING * 2.0)
             / (self.config.font_size as f32 * LINE_H_RATIO)).floor() as u16;
         (cols, rows)
     }
@@ -140,8 +143,8 @@ impl Termpp {
 
     /// Converts pixel dimensions (per-pane) to (cols, rows) for an emulator.
     fn px_to_emu(w_px: f32, h_px: f32, font_size: f32) -> (u16, u16) {
-        let cols = ((w_px - ACCENT_BAR_W - TERM_PADDING * 2.0) / (font_size * CHAR_W_RATIO)).floor() as u16;
-        let rows = ((h_px - TERM_PADDING * 2.0) / (font_size * LINE_H_RATIO)).floor() as u16;
+        let cols = ((w_px - ACTIVE_BORDER_W * 2.0 - TERM_PADDING * 2.0) / (font_size * CHAR_W_RATIO)).floor() as u16;
+        let rows = ((h_px - ACTIVE_BORDER_W * 2.0 - TERM_PADDING * 2.0) / (font_size * LINE_H_RATIO)).floor() as u16;
         (cols.max(1), rows.max(1))
     }
 }
@@ -211,6 +214,7 @@ pub fn boot() -> (Termpp, Task<Message>) {
         dragging_split:    None,
         mouse_pos:         iced::Point::ORIGIN,
         is_selecting:      None,
+        selection_anchor:  None,
     };
 
     (app, Task::none())
@@ -515,7 +519,8 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             for pane in state.workspaces[wi].tabs[ti].panes.values_mut() {
                 pane.selection = None;
             }
-            // Compute start cell from current mouse position
+            // Memorise the start cell but do NOT set pane.selection yet —
+            // selection only appears once the user actually drags.
             let (pw, ph) = state.pane_area_px();
             let pane_area_x = state.sidebar_w + DIVIDER_W;
             let tab = &state.workspaces[wi].tabs[ti];
@@ -525,16 +530,13 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                     let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                     let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
                     let cell = pixel_to_cell(
-                        state.mouse_pos.x, state.mouse_pos.y,
+                        state.mouse_pos.x + ox, state.mouse_pos.y + oy,
                         ox, oy,
                         state.config.font_size as f32,
                         grid.cols(), grid.rows(),
                     );
                     drop(grid); drop(emu);
-                    let tab = &mut state.workspaces[wi].tabs[ti];
-                    if let Some(pane) = tab.panes.get_mut(&pane_id) {
-                        pane.selection = Some((cell, cell));
-                    }
+                    state.selection_anchor = Some(cell);
                 }
             }
             state.is_selecting = Some(pane_id);
@@ -558,10 +560,10 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                             grid.cols(), grid.rows(),
                         );
                         drop(grid); drop(emu);
-                        let tab = &mut state.workspaces[wi].tabs[ti];
-                        if let Some(pane) = tab.panes.get_mut(&pane_id) {
-                            if let Some(sel) = pane.selection.as_mut() {
-                                sel.1 = end_cell;
+                        if let Some(anchor) = state.selection_anchor {
+                            let tab = &mut state.workspaces[wi].tabs[ti];
+                            if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                                pane.selection = Some((anchor, end_cell));
                             }
                         }
                     }
@@ -571,6 +573,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
 
         Message::SelectionEnd => {
             state.is_selecting = None;
+            state.selection_anchor = None;
             // Copy selected text to clipboard
             let wi = state.active_ws_idx();
             let ti = state.workspaces[wi].active_tab_idx();
@@ -586,6 +589,63 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                         if !text.is_empty() {
                             if let Ok(mut cb) = arboard::Clipboard::new() {
                                 let _ = cb.set_text(text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Message::WordSelectAt(pane_id) => {
+            // Cancel any in-progress drag selection triggered by the preceding on_press
+            state.is_selecting = None;
+            state.selection_anchor = None;
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let pane_area_x = state.sidebar_w + DIVIDER_W;
+            let (pw, ph) = state.pane_area_px();
+            let tab = &state.workspaces[wi].tabs[ti];
+            if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
+                if let Some(emu_arc) = tab.emulators.get(&pane_id).cloned() {
+                    let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                    let (col, row) = pixel_to_cell(
+                        state.mouse_pos.x + ox, state.mouse_pos.y + oy,
+                        ox, oy,
+                        state.config.font_size as f32,
+                        grid.cols(), grid.rows(),
+                    );
+                    let cells = grid.visible_row(row);
+                    // Scan left for word start
+                    let start_col = (0..=col)
+                        .rev()
+                        .find(|&c| !cells.get(c).map(|cell| is_word_char(cell.ch)).unwrap_or(false))
+                        .map(|c| c + 1)
+                        .unwrap_or(0);
+                    // Scan right for word end
+                    let end_col = (col..grid.cols())
+                        .find(|&c| !cells.get(c).map(|cell| is_word_char(cell.ch)).unwrap_or(false))
+                        .map(|c| c.saturating_sub(1))
+                        .unwrap_or(grid.cols().saturating_sub(1));
+                    drop(grid); drop(emu);
+                    let tab = &mut state.workspaces[wi].tabs[ti];
+                    if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                        pane.selection = Some(((start_col, row), (end_col, row)));
+                    }
+                    // Copy word to clipboard immediately
+                    let tab = &state.workspaces[wi].tabs[ti];
+                    if let Some(pane) = tab.panes.get(&pane_id) {
+                        if let Some(sel) = pane.selection {
+                            if let Some(emu_arc) = tab.emulators.get(&pane_id) {
+                                let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                                let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                                let text = extract_selection_text(&grid, sel);
+                                drop(grid); drop(emu);
+                                if !text.is_empty() {
+                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                        let _ = cb.set_text(text);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1112,6 +1172,11 @@ fn pane_origin(
     }
 }
 
+/// Returns true for characters considered part of a word for double-click selection.
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 /// Converts absolute window coordinates to (col, row) in the terminal grid.
 fn pixel_to_cell(
     abs_x: f32, abs_y: f32,
@@ -1119,8 +1184,8 @@ fn pixel_to_cell(
     font_size: f32,
     cols: usize, rows: usize,
 ) -> (usize, usize) {
-    let rel_x = (abs_x - origin_x - ACCENT_BAR_W - TERM_PADDING).max(0.0);
-    let rel_y = (abs_y - origin_y - TERM_PADDING).max(0.0);
+    let rel_x = (abs_x - origin_x - ACTIVE_BORDER_W - TERM_PADDING).max(0.0);
+    let rel_y = (abs_y - origin_y - ACTIVE_BORDER_W - TERM_PADDING).max(0.0);
     let col = (rel_x / (font_size * CHAR_W_RATIO)).floor() as usize;
     let row = (rel_y / (font_size * LINE_H_RATIO)).floor() as usize;
     (col.min(cols.saturating_sub(1)), row.min(rows.saturating_sub(1)))
@@ -1215,27 +1280,21 @@ fn render_layout(
                     iced::widget::text("No pane").into()
                 };
 
-            // 3-px left-edge accent bar: bright when active, invisible when not
-            let bar_color = if is_active { AppTheme::ACCENT } else { AppTheme::PANE_BG };
-            let accent_bar: Element<'static, Message> = container(Space::new())
-                .width(ACCENT_BAR_W)
-                .height(Length::Fill)
-                .style(move |_| iced::widget::container::Style {
-                    background: Some(Background::Color(bar_color)),
-                    ..Default::default()
-                })
-                .into();
-
+            let frame_color = if is_active { AppTheme::ACCENT } else { AppTheme::PANE_BG };
             mouse_area(
-                container(
-                    iced::widget::row![accent_bar, content].width(Length::Fill).height(Length::Fill)
-                )
-                .width(w_px)
-                .height(h_px)
+                container(content)
+                    .width(w_px)
+                    .height(h_px)
+                    .padding(ACTIVE_BORDER_W)
+                    .style(move |_| iced::widget::container::Style {
+                        background: Some(Background::Color(frame_color)),
+                        ..Default::default()
+                    })
             )
             .on_move(move |pos| Message::MouseMoved(pos))
             .on_press(Message::SelectionStart(pane_id))
             .on_release(Message::SelectionEnd)
+            .on_double_click(Message::WordSelectAt(pane_id))
             .on_right_press(Message::PasteFromClipboard(pane_id))
             .on_scroll(move |delta| {
                 let y = match delta {
