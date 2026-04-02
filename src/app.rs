@@ -59,6 +59,8 @@ pub struct Termpp {
     is_selecting: Option<usize>,
     /// Start cell of an in-progress selection; None until a drag actually begins.
     selection_anchor: Option<(usize, usize)>,
+    /// True while the Ctrl modifier is held — used to route scroll to zoom.
+    ctrl_held: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,8 @@ pub enum Message {
     SelectionDrag(f32, f32),           // absolute cursor pos during drag
     SelectionEnd,                       // finalise selection (copy in Task 6)
     WordSelectAt(usize),               // pane_id; double-click selects word under cursor
+    CtrlChanged(bool),                 // Ctrl modifier pressed or released
+    ZoomReset,                         // Ctrl+0: reset active pane to config font size
     PasteFromClipboard(usize),         // pane_id
     SplitDividerDragStart(usize, bool),  // (divider_id, is_vertical)
     SplitDividerDragged(f32, f32),       // (mouse_x, mouse_y)
@@ -215,6 +219,7 @@ pub fn boot() -> (Termpp, Task<Message>) {
         mouse_pos:         iced::Point::ORIGIN,
         is_selecting:      None,
         selection_anchor:  None,
+        ctrl_held:         false,
     };
 
     (app, Task::none())
@@ -376,14 +381,16 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::Resized(w, h) => {
             state.window_size = (w, h);
-            let font_size = state.config.font_size as f32;
             let (pw, ph)  = state.pane_area_px();
             for ws in &state.workspaces {
                 for tab in &ws.tabs {
                     let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
                     for (&pid, emu_arc) in &tab.emulators {
+                        let pane_fs = tab.panes.get(&pid)
+                            .map(|p| p.effective_font_size(state.config.font_size as f32))
+                            .unwrap_or(state.config.font_size as f32);
                         let (cols, rows) = px_sizes.get(&pid)
-                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, pane_fs))
                             .unwrap_or((80, 24));
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                         emu.resize(cols, rows);
@@ -399,14 +406,16 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::SidebarDragEnd => {
             state.dragging_sidebar = false;
-            let font_size = state.config.font_size as f32;
             let (pw, ph)  = state.pane_area_px();
             for ws in &state.workspaces {
                 for tab in &ws.tabs {
                     let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
                     for (&pid, emu_arc) in &tab.emulators {
+                        let pane_fs = tab.panes.get(&pid)
+                            .map(|p| p.effective_font_size(state.config.font_size as f32))
+                            .unwrap_or(state.config.font_size as f32);
                         let (cols, rows) = px_sizes.get(&pid)
-                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                            .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, pane_fs))
                             .unwrap_or((80, 24));
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                         emu.resize(cols, rows);
@@ -416,7 +425,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         }
         Message::SplitPane(dir) => {
             let shell      = state.config.shell.clone();
-            let font_size  = state.config.font_size as f32;
+            let default_fs = state.config.font_size as f32;
             let (pw, ph)   = state.pane_area_px();
             let wi = state.active_ws_idx();
             let ti = state.workspaces[wi].active_tab_idx();
@@ -434,15 +443,19 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
                 for (&pid, emu_arc) in &tab.emulators {
                     if let Some(&(wpx, hpx)) = px_sizes.get(&pid) {
-                        let (cols, rows) = Termpp::px_to_emu(wpx, hpx, font_size);
+                        let pane_fs = tab.panes.get(&pid)
+                            .map(|p| p.effective_font_size(default_fs))
+                            .unwrap_or(default_fs);
+                        let (cols, rows) = Termpp::px_to_emu(wpx, hpx, pane_fs);
                         let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                         emu.resize(cols, rows);
                     }
                 }
                 // Start the new emulator at its correct size
                 // px_sizes already includes new_id (layout was updated above)
+                // new pane has no font_size_override yet, so use default
                 let new_size = px_sizes.get(&new_id)
-                    .map(|&(w, h)| Termpp::px_to_emu(w, h, font_size))
+                    .map(|&(w, h)| Termpp::px_to_emu(w, h, default_fs))
                     .unwrap_or((80, 24));
                 if let Ok(emu) = Emulator::start(new_size.0, new_size.1, &shell, &cwd) {
                     tab.last_output_counts.insert(new_id, 0);
@@ -492,17 +505,46 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             }
         }
         Message::PaneScrolled(pane_id, delta) => {
-            let wi = state.active_ws_idx();
-            let ti = state.workspaces[wi].active_tab_idx();
-            let tab = &state.workspaces[wi].tabs[ti];
-            if let Some(emu_arc) = tab.emulators.get(&pane_id) {
-                let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
-                let mut grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
-                let lines = (delta.abs() * 3.0).round() as usize;
-                if delta > 0.0 {
-                    grid.scroll_up_by(lines);
-                } else {
-                    grid.scroll_down_by(lines);
+            if state.ctrl_held {
+                // Zoom: one step per scroll event regardless of delta magnitude
+                let step = if delta > 0.0 { 1.0_f32 } else { -1.0_f32 };
+                let wi = state.active_ws_idx();
+                let ti = state.workspaces[wi].active_tab_idx();
+                let default_fs = state.config.font_size as f32;
+                let tab = &mut state.workspaces[wi].tabs[ti];
+                if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                    let current = pane.effective_font_size(default_fs);
+                    let new_fs  = (current + step).max(4.0);
+                    pane.font_size_override = Some(new_fs);
+                }
+                // Resize the emulator to match the new font size
+                let tab = &state.workspaces[wi].tabs[ti];
+                let new_fs = tab.panes.get(&pane_id)
+                    .map(|p| p.effective_font_size(default_fs))
+                    .unwrap_or(default_fs);
+                let (pw, ph) = state.pane_area_px();
+                let px_sizes  = tab.layout.pane_pixel_sizes(pw, ph);
+                if let (Some(&(wpx, hpx)), Some(emu_arc)) = (
+                    px_sizes.get(&pane_id),
+                    tab.emulators.get(&pane_id),
+                ) {
+                    let (cols, rows) = Termpp::px_to_emu(wpx, hpx, new_fs);
+                    let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    emu.resize(cols, rows);
+                }
+            } else {
+                let wi = state.active_ws_idx();
+                let ti = state.workspaces[wi].active_tab_idx();
+                let tab = &state.workspaces[wi].tabs[ti];
+                if let Some(emu_arc) = tab.emulators.get(&pane_id) {
+                    let emu  = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
+                    let lines = (delta.abs() * 3.0).round() as usize;
+                    if delta > 0.0 {
+                        grid.scroll_up_by(lines);
+                    } else {
+                        grid.scroll_down_by(lines);
+                    }
                 }
             }
         }
@@ -523,6 +565,9 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             // selection only appears once the user actually drags.
             let (pw, ph) = state.pane_area_px();
             let pane_area_x = state.sidebar_w + DIVIDER_W;
+            let pane_fs = state.workspaces[wi].tabs[ti].panes.get(&pane_id)
+                .map(|p| p.effective_font_size(state.config.font_size as f32))
+                .unwrap_or(state.config.font_size as f32);
             let tab = &state.workspaces[wi].tabs[ti];
             if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
                 let emu_arc = tab.emulators.get(&pane_id).cloned();
@@ -532,7 +577,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                     let cell = pixel_to_cell(
                         state.mouse_pos.x + ox, state.mouse_pos.y + oy,
                         ox, oy,
-                        state.config.font_size as f32,
+                        pane_fs,
                         grid.cols(), grid.rows(),
                     );
                     drop(grid); drop(emu);
@@ -548,6 +593,9 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 let pane_area_x = state.sidebar_w + DIVIDER_W;
                 let wi = state.active_ws_idx();
                 let ti = state.workspaces[wi].active_tab_idx();
+                let pane_fs = state.workspaces[wi].tabs[ti].panes.get(&pane_id)
+                    .map(|p| p.effective_font_size(state.config.font_size as f32))
+                    .unwrap_or(state.config.font_size as f32);
                 let tab = &state.workspaces[wi].tabs[ti];
                 if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
                     let emu_arc = tab.emulators.get(&pane_id).cloned();
@@ -556,7 +604,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                         let grid = emu.grid.lock().unwrap_or_else(|e| e.into_inner());
                         let end_cell = pixel_to_cell(
                             x, y, ox, oy,
-                            state.config.font_size as f32,
+                            pane_fs,
                             grid.cols(), grid.rows(),
                         );
                         drop(grid); drop(emu);
@@ -604,6 +652,9 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
             let ti = state.workspaces[wi].active_tab_idx();
             let pane_area_x = state.sidebar_w + DIVIDER_W;
             let (pw, ph) = state.pane_area_px();
+            let pane_fs = state.workspaces[wi].tabs[ti].panes.get(&pane_id)
+                .map(|p| p.effective_font_size(state.config.font_size as f32))
+                .unwrap_or(state.config.font_size as f32);
             let tab = &state.workspaces[wi].tabs[ti];
             if let Some((ox, oy)) = pane_origin(&tab.layout, pane_id, pane_area_x, 0.0, pw, ph) {
                 if let Some(emu_arc) = tab.emulators.get(&pane_id).cloned() {
@@ -612,7 +663,7 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                     let (col, row) = pixel_to_cell(
                         state.mouse_pos.x + ox, state.mouse_pos.y + oy,
                         ox, oy,
-                        state.config.font_size as f32,
+                        pane_fs,
                         grid.cols(), grid.rows(),
                     );
                     let cells = grid.visible_row(row);
@@ -702,15 +753,18 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
         Message::SplitDividerDragEnd => {
             state.dragging_split = None;
             // Resize all emulators in the active tab to their new correct sizes
-            let font_size = state.config.font_size as f32;
+            let default_fs = state.config.font_size as f32;
             let (pw, ph)  = state.pane_area_px();
             let wi = state.active_ws_idx();
             let ti = state.workspaces[wi].active_tab_idx();
             let tab = &mut state.workspaces[wi].tabs[ti];
             let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
             for (&pid, emu_arc) in &tab.emulators {
+                let pane_fs = tab.panes.get(&pid)
+                    .map(|p| p.effective_font_size(default_fs))
+                    .unwrap_or(default_fs);
                 let (cols, rows) = px_sizes.get(&pid)
-                    .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, font_size))
+                    .map(|&(wpx, hpx)| Termpp::px_to_emu(wpx, hpx, pane_fs))
                     .unwrap_or((80, 24));
                 let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
                 emu.resize(cols, rows);
@@ -909,6 +963,31 @@ pub fn update(state: &mut Termpp, message: Message) -> Task<Message> {
                 ws.collapsed = !ws.collapsed;
             }
         }
+        Message::CtrlChanged(held) => {
+            state.ctrl_held = held;
+        }
+        Message::ZoomReset => {
+            let wi = state.active_ws_idx();
+            let ti = state.workspaces[wi].active_tab_idx();
+            let pane_id = state.workspaces[wi].tabs[ti].active_pane;
+            let default_fs = state.config.font_size as f32;
+            let tab = &mut state.workspaces[wi].tabs[ti];
+            if let Some(pane) = tab.panes.get_mut(&pane_id) {
+                pane.font_size_override = None;
+            }
+            // Resize emulator to match restored font size
+            let (pw, ph) = state.pane_area_px();
+            let tab = &state.workspaces[wi].tabs[ti];
+            let px_sizes = tab.layout.pane_pixel_sizes(pw, ph);
+            if let (Some(&(wpx, hpx)), Some(emu_arc)) = (
+                px_sizes.get(&pane_id),
+                tab.emulators.get(&pane_id),
+            ) {
+                let (cols, rows) = Termpp::px_to_emu(wpx, hpx, default_fs);
+                let emu = emu_arc.lock().unwrap_or_else(|e| e.into_inner());
+                emu.resize(cols, rows);
+            }
+        }
     }
     Task::none()
 }
@@ -1086,8 +1165,20 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                 if matches_binding(&key, modifiers, &bindings.workspace_new) {
                     return Some(Message::NewWorkspace);
                 }
+                // Ctrl+0 → reset active pane zoom
+                if modifiers.control() {
+                    if let iced::keyboard::Key::Character(c) = &key {
+                        if c.as_str() == "0" {
+                            return Some(Message::ZoomReset);
+                        }
+                    }
+                }
                 let bytes = key_to_bytes(&key, modifiers, text.as_deref());
                 if bytes.is_empty() { None } else { Some(Message::KeyInput(bytes)) }
+            } else if let iced::Event::Keyboard(
+                iced::keyboard::Event::ModifiersChanged(m)
+            ) = event {
+                return Some(Message::CtrlChanged(m.control()));
             } else {
                 None
             }
@@ -1242,6 +1333,9 @@ fn render_layout(
         Layout::Leaf(pane_id) => {
             let pane_id = *pane_id;
             let is_active = pane_id == active_pane;
+            let pane_font = panes.get(&pane_id)
+                .and_then(|p| p.font_size_override)
+                .unwrap_or(font_size);
 
             let content: Element<'static, Message> =
                 if let (Some(pane), Some(emu_arc)) = (panes.get(&pane_id), emulators.get(&pane_id)) {
@@ -1271,7 +1365,7 @@ fn render_layout(
                         TerminalPane::new(
                             Arc::clone(&emu.grid),
                             panes.get(&pane_id).and_then(|p| p.selection),
-                            font_size,
+                            pane_font,
                             font_name,
                             cursor_on,
                         ).view()

@@ -22,6 +22,8 @@ pub struct PaneState {
     /// Active text selection: ((start_col, start_row), (end_col, end_row)) in visual coordinates.
     /// None when no selection is active.
     pub selection: Option<((usize, usize), (usize, usize))>,
+    /// Per-pane font size override. None = use global config default.
+    pub font_size_override: Option<f32>,
 }
 
 impl PaneState {
@@ -35,7 +37,13 @@ impl PaneState {
             pane_name: None,
             terminal_title: None,
             selection: None,
+            font_size_override: None,
         }
+    }
+
+    /// Returns the effective font size for this pane.
+    pub fn effective_font_size(&self, default: f32) -> f32 {
+        self.font_size_override.unwrap_or(default)
     }
 
     pub fn on_output(&mut self) {
