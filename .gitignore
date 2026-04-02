@@ -1,2 +1,7 @@
 /target
 /.worktrees
+.superpowers/
+.claude/
+debug*.txt
+feedbacks/
+docs/superpowers/
