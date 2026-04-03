@@ -22,9 +22,34 @@ Inspired by tools like cmux (macOS-only), termpp aims to bring a native GUI mult
 
 ## Build
 
+### Windows
+
 ```sh
 cargo build --release
 ```
+
+### Linux
+
+Install system dependencies first (Debian/Ubuntu/Pop!_OS):
+
+```sh
+sudo apt install \
+  build-essential pkg-config \
+  libxkbcommon-dev \
+  libwayland-dev \
+  libegl-dev \
+  libvulkan-dev \
+  mesa-vulkan-drivers \
+  libfontconfig-dev
+```
+
+Then:
+
+```sh
+cargo build --release
+```
+
+> **Note:** termpp is a GUI application and requires a display to run. It cannot be launched over a headless SSH session — compile remotely, test locally.
 
 The binary ends up at `target/release/termpp` (or `termpp.exe` on Windows).
 
