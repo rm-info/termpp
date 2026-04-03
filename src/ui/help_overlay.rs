@@ -57,7 +57,7 @@ pub fn help_overlay<Message: Clone + 'static>(
         ("Copier la sélection",     "Relâcher le clic"),
         ("Coller",                  "Clic droit"),
         ("Défiler l'historique",    "Molette"),
-        ("Zoomer / dézoomer",       "Ctrl + molette"),
+        ("Zoomer / dézoomer",       "Ctrl + Molette"),
         ("Taille par défaut",       "Ctrl + 0"),
     ];
 

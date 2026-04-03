@@ -56,18 +56,18 @@ pub struct Keybindings {
     pub workspace_new: String,
 }
 
-fn default_split_h()        -> String { "ctrl+shift+h".to_string() }
-fn default_split_v()        -> String { "ctrl+shift+v".to_string() }
-fn default_pane_next()      -> String { "ctrl+tab".to_string() }
-fn default_pane_prev()      -> String { "ctrl+shift+tab".to_string() }
-fn default_close_pane()     -> String { "ctrl+shift+q".to_string() }
-fn default_rename_pane()    -> String { "ctrl+shift+r".to_string() }
-fn default_tab_next()       -> String { "ctrl+pagedown".to_string() }
-fn default_tab_prev()       -> String { "ctrl+pageup".to_string() }
-fn default_tab_new()        -> String { "ctrl+shift+t".to_string() }
-fn default_workspace_next() -> String { "ctrl+shift+pagedown".to_string() }
-fn default_workspace_prev() -> String { "ctrl+shift+pageup".to_string() }
-fn default_workspace_new()  -> String { "ctrl+shift+w".to_string() }
+fn default_split_h()        -> String { "Ctrl + Shift + H".to_string() }
+fn default_split_v()        -> String { "Ctrl + Shift + V".to_string() }
+fn default_pane_next()      -> String { "Ctrl + Tab".to_string() }
+fn default_pane_prev()      -> String { "Ctrl + Shift + Tab".to_string() }
+fn default_close_pane()     -> String { "Ctrl + Shift + Q".to_string() }
+fn default_rename_pane()    -> String { "Ctrl + Shift + R".to_string() }
+fn default_tab_next()       -> String { "Ctrl + PageDown".to_string() }
+fn default_tab_prev()       -> String { "Ctrl + PageUp".to_string() }
+fn default_tab_new()        -> String { "Ctrl + Shift + T".to_string() }
+fn default_workspace_next() -> String { "Ctrl + Shift + PageDown".to_string() }
+fn default_workspace_prev() -> String { "Ctrl + Shift + PageUp".to_string() }
+fn default_workspace_new()  -> String { "Ctrl + Shift + W".to_string() }
 
 impl Default for Keybindings {
     fn default() -> Self {

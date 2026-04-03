@@ -1100,7 +1100,7 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
     let keyboard = iced::event::listen()
         .with((bindings, is_renaming_tab, is_renaming_ws, show_help, active_tab_id, active_workspace_id))
         .filter_map(|((bindings, is_renaming_tab, is_renaming_ws, show_help, active_tab_id, active_workspace_id), event): ((termpp::config::Keybindings, bool, bool, bool, usize, usize), iced::Event)| -> Option<Message> {
-            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, text, .. }) = event {
+            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modified_key: _, physical_key, modifiers, text, .. }) = event {
                 use iced::keyboard::key::Named;
 
                 // 1. F1 always opens/closes help — checked before any other guard
@@ -1166,11 +1166,14 @@ pub fn subscription(state: &Termpp) -> Subscription<Message> {
                     return Some(Message::NewWorkspace);
                 }
                 // Ctrl+0 → reset active pane zoom
+                // Use physical_key so this works on any layout (AZERTY, QWERTY…)
+                // regardless of whether 0 requires Shift.
                 if modifiers.control() {
-                    if let iced::keyboard::Key::Character(c) = &key {
-                        if c.as_str() == "0" {
-                            return Some(Message::ZoomReset);
-                        }
+                    use iced::keyboard::key::{Code, Physical};
+                    if matches!(physical_key,
+                        Physical::Code(Code::Digit0) | Physical::Code(Code::Numpad0)
+                    ) {
+                        return Some(Message::ZoomReset);
                     }
                 }
                 let bytes = key_to_bytes(&key, modifiers, text.as_deref());
